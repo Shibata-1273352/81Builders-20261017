@@ -24,6 +24,8 @@ def ensure_schema():
  with session() as s:
   s.run('CREATE CONSTRAINT tsumugi_key IF NOT EXISTS FOR (n:Tsumugi) REQUIRE n.key IS UNIQUE').consume()
   s.run('CREATE INDEX tsumugi_revision IF NOT EXISTS FOR (n:Tsumugi) ON (n.analysis_id, n.revision)').consume()
+  # Open a writer connection now so the first analysis does not pay the cold-start cost.
+  s.execute_write(lambda tx:tx.run('RETURN 1').consume())
 
 def write(payload):
  if any(n['label'] not in LABELS for n in payload['nodes']) or any(e['type'] not in RELS for e in payload['edges']):raise ValueError('Graph label or relationship is not whitelisted')
@@ -87,10 +89,10 @@ def shape(p):
  # Same JSON shape for Neo4j reads and the local fallback.
  return {'nodes':[{'id':n['props']['id'],'label':n['label'],**{k:v for k,v in n['props'].items() if k not in ['analysis_id','revision']}} for n in p['nodes']],'edges':[{'source':e['a'].rsplit(':',1)[1],'target':e['b'].rsplit(':',1)[1],'type':e['type'],**e['props']} for e in p['edges']]}
 def read(aid,revision):
+ # One round trip: each node with its outgoing relationships.
  with session() as s:
-  nodes=s.run("MATCH (n:Tsumugi) WHERE n.analysis_id=$aid AND n.revision=$rev AND n.key STARTS WITH 'v2:' RETURN [l IN labels(n) WHERE l<>'Tsumugi'][0] AS label, properties(n) AS props",aid=aid,rev=revision).data()
-  edges=s.run("MATCH (a:Tsumugi)-[r]->(b:Tsumugi) WHERE a.analysis_id=$aid AND a.revision=$rev AND a.key STARTS WITH 'v2:' RETURN a.id AS source, b.id AS target, type(r) AS type, properties(r) AS props",aid=aid,rev=revision).data()
- return {'nodes':[{'id':n['props']['id'],'label':n['label'],**{k:v for k,v in n['props'].items() if k not in ['key','analysis_id','revision']}} for n in nodes],'edges':[{'source':e['source'],'target':e['target'],'type':e['type'],**e['props']} for e in edges]}
+  rows=s.run("MATCH (n:Tsumugi) WHERE n.analysis_id=$aid AND n.revision=$rev AND n.key STARTS WITH 'v2:' OPTIONAL MATCH (n)-[r]->(b:Tsumugi) RETURN [l IN labels(n) WHERE l<>'Tsumugi'][0] AS label, properties(n) AS props, collect(CASE WHEN r IS NULL THEN NULL ELSE {target:b.id, type:type(r), props:properties(r)} END) AS out",aid=aid,rev=revision).data()
+ return {'nodes':[{'id':n['props']['id'],'label':n['label'],**{k:v for k,v in n['props'].items() if k not in ['key','analysis_id','revision']}} for n in rows],'edges':[{'source':n['props']['id'],'target':e['target'],'type':e['type'],**e['props']} for n in rows for e in n['out']]}
 IMPACT='''MATCH (s:Source {key:$key})-[:HAS_PASSAGE]->(p:Passage)<-[:CITES]-(x:Assessment)-[:EVALUATES]->(c:Claim)
 OPTIONAL MATCH (e:Explanation)-[:BASED_ON]->(x)
 RETURN collect(DISTINCT p.id) AS passage_ids, collect(DISTINCT x.id) AS assessment_ids, collect(DISTINCT c.id) AS claim_ids, collect(DISTINCT e.id) AS explanation_ids'''
