@@ -10,6 +10,11 @@ RUN="$ROOT/.runtime"
 PIDS="$RUN/pids"
 LOGS="$RUN/logs"
 mkdir -p "$PIDS" "$LOGS"
+# Optional SAM3 sidecar: read from the environment or .env (the backend loads .env itself).
+env_value() { local v; eval "v=\${$1:-}"; [ -z "$v" ] && [ -f .env ] && v=$(sed -n "s/^$1=//p" .env | tail -1 | sed "s/^[\"']//;s/[\"']$//"); printf '%s' "$v"; }
+SAM3_PYTHON=$(env_value SAM3_PYTHON); SAM3_MODEL_DIR=$(env_value SAM3_MODEL_DIR)
+SAM3_PORT=${SAM3_PORT:-8010}
+sam3_configured() { [ -n "$SAM3_PYTHON" ] && [ -n "$SAM3_MODEL_DIR" ]; }
 
 listener() { lsof -tiTCP:"$1" -sTCP:LISTEN 2>/dev/null | head -1; }
 alive() { [ -n "${1:-}" ] && kill -0 "$1" 2>/dev/null; }
@@ -40,12 +45,22 @@ start() {
   [ -x .venv/bin/uvicorn ] || { echo "✗ .venv is missing. Run: python3 -m venv .venv && .venv/bin/pip install -r backend/requirements.txt"; exit 1; }
   [ -d node_modules ] || { echo "✗ node_modules is missing. Run: npm install"; exit 1; }
   [ -f .env ] || echo "! .env not found; model and Neo4j calls will fail."
-  for port in "$BACKEND_PORT" "$FRONTEND_PORT"; do
+  local ports="$BACKEND_PORT $FRONTEND_PORT"
+  sam3_configured && ports="$ports $SAM3_PORT"
+  for port in $ports; do
     local pid
     pid=$(listener "$port")
     if [ -n "$pid" ]; then echo "✗ Port $port is in use (PID $pid: $(ps -o command= -p "$pid" | cut -c1-80))."; echo "  Run 'npm run down' first, or set BACKEND_PORT / FRONTEND_PORT."; exit 1; fi
   done
 
+  if sam3_configured; then
+    echo "→ SAM3 segmentation on http://127.0.0.1:$SAM3_PORT (loading the model takes ~20s)"
+    HF_HUB_OFFLINE=1 nohup "$SAM3_PYTHON" -I scripts/sam3_server.py --model "$SAM3_MODEL_DIR" --data "${TSUMUGI_DATA_DIR:-$RUN}" --port "$SAM3_PORT" >"$LOGS/sam3.log" 2>&1 &
+    echo $! >"$PIDS/sam3.pid"
+    # Segmentation is optional: without it the backend keeps the VLM candidate boxes.
+    if wait_for "http://127.0.0.1:$SAM3_PORT/health" 90 sam3 "$(pid_of sam3)"; then export SAM3_URL="http://127.0.0.1:$SAM3_PORT"
+    else echo "! Continuing without segmentation."; export SAM3_URL=""; fi
+  fi
   echo "→ Backend on http://127.0.0.1:$BACKEND_PORT"
   nohup .venv/bin/uvicorn backend.main:app --host 127.0.0.1 --port "$BACKEND_PORT" >"$LOGS/backend.log" 2>&1 &
   echo $! >"$PIDS/backend.pid"
@@ -71,13 +86,13 @@ start() {
 
 stop() {
   local name pid port stopped=0
-  for name in frontend backend; do
+  for name in frontend backend sam3; do
     pid=$(pid_of "$name")
     if alive "$pid"; then kill_tree "$pid"; echo "■ Stopped $name (PID $pid)"; stopped=1; fi
     rm -f "$PIDS/$name.pid"
   done
   # Also stop this project's servers started outside the script (e.g. npm run dev).
-  for port in "$FRONTEND_PORT" "$BACKEND_PORT"; do
+  for port in "$FRONTEND_PORT" "$BACKEND_PORT" "$SAM3_PORT"; do
     pid=$(listener "$port")
     if [ -n "$pid" ]; then
       if ours "$pid"; then kill_tree "$pid"; echo "■ Stopped process on port $port (PID $pid)"; stopped=1
@@ -85,7 +100,7 @@ stop() {
     fi
   done
   for _ in 1 2 3 4 5 6 7 8 9 10; do
-    [ -z "$(listener "$BACKEND_PORT")$(listener "$FRONTEND_PORT")" ] && break
+    [ -z "$(listener "$BACKEND_PORT")$(listener "$FRONTEND_PORT")$(listener "$SAM3_PORT")" ] && break
     sleep 0.5
   done
   [ $stopped = 0 ] && echo "Nothing to stop."
@@ -100,6 +115,8 @@ status() {
   else echo "○ backend   stopped"; fi
   if [ -n "$(listener "$FRONTEND_PORT")" ]; then echo "● frontend  http://127.0.0.1:$FRONTEND_PORT"
   else echo "○ frontend  stopped"; fi
+  if [ -n "$(listener "$SAM3_PORT")" ]; then echo "● sam3      http://127.0.0.1:$SAM3_PORT  $(curl -fs "http://127.0.0.1:$SAM3_PORT/health" || echo loading)"
+  elif sam3_configured; then echo "○ sam3      stopped"; fi
 }
 
 case "${1:-}" in
@@ -107,6 +124,6 @@ case "${1:-}" in
   stop) stop ;;
   restart) stop; start "${2:-}" ;;
   status) status ;;
-  logs) tail -n 40 -f "$LOGS/backend.log" "$LOGS/frontend.log" ;;
+  logs) tail -n 40 -f "$LOGS/backend.log" "$LOGS/frontend.log" $([ -f "$LOGS/sam3.log" ] && echo "$LOGS/sam3.log") ;;
   *) echo "Usage: $0 start [--dev] | stop | restart [--dev] | status | logs"; exit 1 ;;
 esac

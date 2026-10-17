@@ -45,9 +45,10 @@ def payload(a):
  for asset in a['assets']:node('Asset',asset['id'],name=f"Image {asset['index']}",index=asset['index'],mime_type=asset['mime_type'],width=asset.get('width'),height=asset.get('height'),content_hash=a['input_hash'])
  for o in a['observations']:
   region='region-'+o['id']
-  node('Region',region,name='Whole image' if not o['bbox'] else 'Region '+o['id'].split('-',1)[1],bbox_normalized=o['bbox'],asset_id=o['asset_id'],producer=o['producer'])
+  m=o.get('mask') or {}
+  node('Region',region,name='Whole image' if not o['bbox'] else 'Region '+o['id'].split('-',1)[1],bbox_normalized=o['bbox'],asset_id=o['asset_id'],producer=o['producer'],prompt=o.get('label'),segmenter=m.get('segmenter'),mask_score=m.get('score'),instance_count=m.get('instance_count'),mask_area=m.get('area'))
   node('Observation',o['id'],name=o['text'][:48],text=o['text'],text_ja=o.get('text_ja'),asset_id=o['asset_id'])
-  edge('HAS_REGION',o['asset_id'],region);edge('GROUNDS',region,o['id']);generated(o['id'],o.get('run_id'))
+  edge('HAS_REGION',o['asset_id'],region);edge('GROUNDS',region,o['id']);generated(o['id'],o.get('run_id'));generated(region,m.get('run_id'))
  for c in a['claims']:
   node('Claim',c['id'],name=c['text'][:48],text=c['text'],text_ja=c.get('text_ja'),kind=c['kind'])
   scope='scope-'+c['id']

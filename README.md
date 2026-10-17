@@ -23,6 +23,18 @@ npm run logs     # follow .runtime/logs/backend.log and frontend.log
 npm run down     # stop both, including this project's servers started by hand
 ```
 
+### Optional: local SAM3 segmentation
+
+SAM3 (`facebook/sam3`, gated on Hugging Face) turns the VLM's candidate boxes into pixel masks. It runs as a separate local process because it needs Python 3.10+ with PyTorch, while the backend's `.venv` stays as it is:
+
+```sh
+uv venv ~/models/sam3/.venv --python 3.12
+uv pip install --python ~/models/sam3/.venv/bin/python torch torchvision transformers huggingface_hub pillow
+~/models/sam3/.venv/bin/hf download facebook/sam3 --exclude sam3.pt --local-dir ~/models/sam3/facebook-sam3
+```
+
+Then set `SAM3_PYTHON=~/models/sam3/.venv/bin/python` and `SAM3_MODEL_DIR=~/models/sam3/facebook-sam3` (absolute paths) in `.env`. `npm run up` starts the sidecar on port 8010 (`SAM3_PORT`), waits for the model to load, and passes `SAM3_URL` to the backend; `npm run status` and `npm run down` include it. Without these variables, or if the sidecar fails to start, the app keeps the VLM boxes as before.
+
 Open http://127.0.0.1:3000. `BACKEND_PORT` and `FRONTEND_PORT` override the default ports 8000 and 3000. `npm run down` only stops processes running from this directory; another app on the same port is left alone. To run the servers separately instead, use `npm run backend` with `npm run dev` (or `npm run demo`) in two terminals; set `TSUMUGI_BACKEND_URL` if the backend is not on port 8000. Both servers bind to loopback. Use one backend process; there is no multi-worker job queue or public authentication.
 
 ## 90-second walkthrough
@@ -42,6 +54,7 @@ A Japanese presenter script with timings, talking points and fallbacks is in [do
 - Next.js/TypeScript with locally served fonts, responsive original/meaning/graph views and evidence panel. Japanese text uses system Japanese fonts via `:lang(ja)`.
 - FastAPI proxies ai& calls; pixels and text are sent only during analysis. Uploaded images are retained locally; metadata-stripped, resized copies are sent to the model.
 - Models return English and Japanese together. Wording decided by code (reason codes, fallbacks) is a fixed EN/JA template. Quotes stay in the original language; `quote_ja` is a labelled reference translation. If Japanese is missing, English is shown and a limitation is recorded.
+- With SAM3 enabled, each image is encoded by the local sidecar as soon as the job starts. When the VLM's observations arrive, its short label for each observation (e.g. "paper lanterns") is used as a SAM3 text prompt, and only instances lying mostly inside that observation's candidate box are kept and merged into one mask. Masks are shaded under the boxes and stored as Region properties in Neo4j (`segmenter`, `mask_score`, `instance_count`, `mask_area`). The job waits for masks for at most 25 seconds and never past 60 seconds into its 75-second deadline; a missing or failed sidecar leaves the boxes with an image limitation. Revisions reuse the masks without re-segmenting.
 - A text model proposes candidate links between claims and image observations. Unknown IDs are dropped, and links never affect a verdict.
 - Each model-written explanation is checked by a different model family (`AIAND_CHECK_MODEL`, default `qwen/qwen3.8-27b`) for grounding and Japanese fidelity. Anything not accepted, including a checker outage, falls back to fixed wording.
 - Calls run concurrently (at most 8 at a time): every image observation and claim extraction start together, verification starts once claims exist, and each claim runs its own write → check pipeline alongside quote translation. Observations and claims stream to the UI as they finish; Activity shows a timeline of the model calls.
@@ -50,7 +63,7 @@ A Japanese presenter script with timings, talking points and fallbacks is in [do
 - Sources are registered text, not fetched URLs. Model-selected passage IDs must resolve to saved text; fabricated IDs cannot support a claim. Place/time mismatches and conflicting evidence remain unresolved.
 - A single in-process job runs at a time. Model calls time out after 20 seconds with up to one retry (the independent check: 8 seconds); jobs have a 75-second deadline. Failed graph writes remain pending for startup replay. An interrupted job becomes failed and can be retried.
 - Revising evidence retains the previous verified display until graph persistence succeeds. Failed revisions never replace it with a successful-looking explanation.
-- No image segmentation, public deployment or photo-provenance verification is implemented. VLM boxes are explicitly candidates, and photograph identity claims conservatively remain unresolved.
+- No public deployment or photo-provenance verification is implemented. VLM boxes and SAM3 masks are explicitly candidates: SAM3 only refines observations that already have a box, and photograph identity claims conservatively remain unresolved.
 
 ## Checks
 
