@@ -17,6 +17,10 @@ TSUMUGI は、写真が示すことと、キャプションが主張すること
 
 ## 2. 全体図
 
+![TSUMUGI のシステム構成](images/tsumugi-architecture.png)
+
+次の図は、同じ構成を mermaid で描いたものです。
+
 ```mermaid
 flowchart LR
   B["ブラウザ<br/>Next.js (3000)"] -- "/api/* の rewrite" --> F
