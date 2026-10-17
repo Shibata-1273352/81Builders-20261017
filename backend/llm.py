@@ -33,7 +33,7 @@ async def call(system, data, image=None, runs=None, tool='model', model=None, ef
    # Callers use the run ID to link generated records to their ToolRun in the graph.
    value['_run_id']=run['id']
    return value
-  except (httpx.HTTPError,ModelError,ValueError,KeyError,IndexError) as e:
+  except (httpx.HTTPError,ModelError,ValueError,KeyError,IndexError,AttributeError,TypeError) as e:
    if attempt==attempts-1:
     run.update(status='failed',latency_ms=round((time.monotonic()-started)*1000),output_valid=False,error_code=type(e).__name__)
     raise ModelError('Model response unavailable or invalid; retry the analysis.') from None

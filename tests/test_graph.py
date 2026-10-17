@@ -6,12 +6,14 @@ def analysis(revision=2):
  run=lambda id,tool,model:dict(id=id,tool=tool,model_id=model,latency_ms=900,started_at='2026-10-17T00:00:00+00:00')
  return dict(id='a',revision=revision,display_revision=revision,status='completed',text='Festival in July. Photo 1 in 2026.',input_hash='h',
   assets=[dict(id='a-1.jpg',index=1,mime_type='image/jpeg',width=10,height=10),dict(id='a-2.jpg',index=2,mime_type='image/jpeg',width=10,height=10)],
-  runs=[run('r-obs','Image observation · 1','vision'),run('r-claims','Claim extraction','text'),run('r-link','Claim–observation linking','text'),run('r-verify','Evidence verification','text'),run('r-explain','Explanation writing','text'),run('r-unused','Quote translation','text')],
+  runs=[run('r-obs','Image observation · 1','vision'),run('r-claims','Claim extraction','text'),run('r-link','Claim–observation linking','text'),run('r-verify','Evidence verification','text'),run('r-explain','Explanation writing','text'),run('r-unused','Quote translation','text'),run('r-write','Cultural notes · writer','writer'),run('r-glm','Cultural review · glm-5.3','glm')],
   observations=[dict(id='observation-1-1',asset_id='a-1.jpg',text='Lanterns',text_ja='提灯',bbox=[.1,.1,.2,.2],producer='VLM candidate',run_id='r-obs'),dict(id='observation-2-1',asset_id='a-2.jpg',text='Steps',text_ja='階段',bbox=None,producer='VLM candidate',run_id='r-obs')],
   claims=[dict(id='claim-1',text='Festival in July.',text_ja='祭りは7月。',kind='context',place='Kyoto',time_start=None,time_end=None,observation_ids=['observation-1-1'],run_id='r-claims',link_run_id='r-link'),dict(id='claim-2',text='Photo 1 in 2026.',text_ja='写真1は2026年。',kind='photo_identity',place=None,time_start='2026',time_end=None,observation_ids=[],run_id='r-claims',link_run_id='r-link')],
   sources=[dict(id='s1',title='FAQ',text='Held in July.',publisher='City',active=True,content_hash='c'),dict(id='s2',title='Other',text='Unrelated.',publisher='',active=True,content_hash='d')],
   assessments=[dict(id='assessment-claim-1',claim_id='claim-1',status='confirmed',reason_code='support_found',reason='r',reason_ja='理由',missing='',passages=[dict(id='passage-claim-1-1',source_id='s1',quote='Held in July.',quote_ja='7月に開催。',start=0,end=13,stance='supports',scope_match=True)],run_id='r-verify'),dict(id='assessment-claim-2',claim_id='claim-2',status='unresolved',reason_code='photo_provenance_missing',reason='r',reason_ja='理由',missing='m',passages=[],run_id='r-verify')],
   explanations=[dict(id='explanation-observation-1-1',section='see',text='Lanterns',text_ja='提灯',claim_ids=[],support_ids=[{'type':'Observation','id':'observation-1-1','revision':revision}],origin='observation',check=None,run_id=None),dict(id='explanation-claim-1',section='context',text='Supported.',text_ja='裏付けあり。',claim_ids=['claim-1'],support_ids=[{'type':'Assessment','id':'assessment-claim-1','revision':revision}],origin='model',check=dict(model_id='qwen/qwen3.8-27b',verdict='accepted'),run_id='r-explain'),dict(id='explanation-claim-2',section='unknown',text='Unknown.',text_ja='不明。',claim_ids=['claim-2'],support_ids=[{'type':'Assessment','id':'assessment-claim-2','revision':revision}],origin='template',check=None,run_id=None)],
+  cultural_notes=[dict(id='note-1',about='observation-1-1',term=dict(ja='提灯',reading='chōchin',en='paper lantern'),summary=dict(id='note-1-s',en='Festival lanterns.',ja='祭りの提灯。',consensus=dict(status='agreed',agree=3,total=3,corrections=[])),points=[],consensus='agreed',run_id='r-write',
+   reviews=[dict(model='glm',run_id='r-glm',failed=False,verdict='agree'),dict(model='qwen',run_id=None,failed=True,verdict=None)])],
   limitations=[],changes=[],stale_claim_ids=[],previous=None,error=None,created_at='',updated_at='',started_at='')
 
 def test_labels_and_relationships_whitelisted():
@@ -34,6 +36,16 @@ def test_linked_to_and_generated_by():
  runs={n['props']['id']:n['props'] for n in p['nodes'] if n['label']=='ToolRun'}
  assert 'r-unused' not in runs and runs['r-obs']['latency_ms']==900
  assert next(n for n in p['nodes'] if n['props']['id']=='explanation-claim-1')['props']['check_model']=='qwen/qwen3.8-27b'
+
+def test_cultural_notes_link_to_observation_and_runs():
+ p=graph.payload(analysis());edges={(e['a'].rsplit(':',1)[1],e['type'],e['b'].rsplit(':',1)[1]):e['props'] for e in p['edges']}
+ note=next(n['props'] for n in p['nodes'] if n['label']=='CulturalNote')
+ assert (note['term_ja'],note['term_en'],note['consensus'])==('提灯','paper lantern','agreed')
+ assert ('note-1','ABOUT','observation-1-1') in edges and ('note-1','GENERATED_BY','r-write') in edges
+ # A reviewer that failed has no run to point at; it is simply absent.
+ assert edges[('note-1','REVIEWED_BY','r-glm')]=={'verdict':'agree','model_id':'glm'} and sum(1 for k in edges if k[1]=='REVIEWED_BY')==1
+ # Notes never feed an assessment or explanation.
+ assert not any(k[0]=='note-1' and k[1] in ('BASED_ON','EVALUATES','CITES') for k in edges)
 
 def test_local_impact_follows_citations():
  a=analysis()

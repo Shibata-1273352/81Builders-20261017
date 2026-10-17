@@ -56,7 +56,12 @@ def run(tmp_path,monkeypatch):
  start.again=lambda a:asyncio.run(pipeline.process(a))
  return start
 
+NOTES={'notes':[{'about':'observation-2-1','term':{'ja':'提灯','reading':'chōchin','en':'paper lantern'},'summary_en':'Paper lanterns used at festivals.','summary_ja':'祭りで使われる紙の灯り。','points':[{'en':'Paper over a bamboo frame.','ja':'竹の骨組みに紙を張る。'},{'en':'Often carry crests.','ja':'紋が入ることが多い。'}],'caution_en':'The photo cannot tell which festival.','caution_ja':'どの祭りかは写真からは分からない。'},
+ {'about':'observation-9-9','term':{'ja':'','en':'no term'},'summary_en':'Dropped: no Japanese term.'}]}
+def agree(data):return {'reviews':[{'item_id':i['item_id'],'verdict':'agree'} for i in data['items']]}
 def base(tool,data):
+ if tool=='Cultural notes · writer':return NOTES
+ if tool.startswith('Cultural review'):return agree(data)
  if tool=='Image observation · 1':return {'observations':[{'text':'Seated men','text_ja':'座っている男性','bbox':[0.33,0.68,0.72,0.89]},{'text':'Inverted','text_ja':'逆','bbox':[0.5,0.5,0.2,0.9]}]}
  if tool=='Image observation · 2':return {'observations':[{'text':'Lanterns','text_ja':'提灯','bbox':[0.1,0.1,0.5,0.3]}]}
  if tool=='Claim extraction':return {'claims':[{'text':'Festival in July.','text_ja':'祭りは7月。','span':'Festival in July.'},{'text':'Photograph 2 was taken in 2026.','text_ja':'写真2は2026年に撮影された。','span':'Both photographs were taken in 2026.','kind':'photo_identity'}]}
@@ -84,7 +89,7 @@ def test_independent_check_uses_check_model(run,monkeypatch):
  a=run(base,[SOURCE])
  check=[c for c in run.calls if c['tool'].startswith('Independent check')][0]
  assert check['model']=='qwen/qwen-test';assert check['effort']=='low';assert check['tool']=='Independent check · qwen · C1'
- assert all(c['model'] is None for c in run.calls if not c['tool'].startswith('Independent check'))
+ assert all(c['model'] is None for c in run.calls if not c['tool'].startswith(('Independent check','Cultural')))
  e=a['explanations'][-2];assert e['origin']=='model';assert e['check']=={'model_id':'qwen/qwen-test','verdict':'accepted'}
  assert a['assessments'][0]['status']=='confirmed';assert a['assessments'][0]['passages'][0]['quote_ja']=='祇園祭は7月を通して行われる。'
  assert a['status']=='completed'
@@ -147,3 +152,52 @@ def test_check_outage_keeps_template(run):
  a=run(replies,[SOURCE]);e=a['explanations'][-2]
  assert e['origin']=='template' and e['check']['verdict']=='unavailable' and a['assessments'][0]['status']=='confirmed'
  assert any(l['text'].startswith('The independent check was unavailable') for l in a['limitations'])
+
+from backend import culture
+def test_consensus_counts_the_writer_and_each_answer():
+ items=[dict(id='p1',en='a'),dict(id='p2',en='b')]
+ rv=lambda model,**v:dict(model=model,verdicts={k:dict(verdict=x,correction_en=f'{model} fixes {k}' if x!='agree' else '') for k,x in v.items()})
+ agreed=culture.consensus(items,[rv('glm',p1='agree',p2='agree'),rv('qwen',p1='agree',p2='agree')])
+ assert [x['consensus']['status'] for x in agreed]==['agreed','agreed'] and agreed[0]['consensus']['agree']==agreed[0]['consensus']['total']==3
+ # A majority of reviewers disagreeing drops the point; one of two is a dispute, shown with the correction.
+ mixed=culture.consensus(items,[rv('glm',p1='disagree',p2='disagree'),rv('qwen',p1='agree',p2='disagree')])
+ assert [x['id'] for x in mixed]==['p1'] and mixed[0]['consensus']['status']=='disputed' and mixed[0]['consensus']['agree']==2
+ assert mixed[0]['consensus']['corrections']==[{'model':'glm','verdict':'disagree','en':'glm fixes p1','ja':None}]
+ # An unknown verdict or a missing item counts as unsure.
+ assert culture.consensus(items[:1],[rv('glm',p1='maybe'),dict(model='qwen',verdicts={})])[0]['consensus']['status']=='disputed'
+ # Reviewers that failed do not vote; with none left the point is shown unchecked, never dropped.
+ assert culture.consensus(items[:1],[dict(model='glm',failed=True),rv('qwen',p1='agree')])[0]['consensus']=={'status':'agreed','agree':2,'total':2,'corrections':[]}
+ assert culture.consensus(items[:1],[dict(model='glm',failed=True),dict(model='qwen',failed=True)])[0]['consensus']['status']=='unchecked'
+
+def test_cultural_notes_written_reviewed_and_kept_apart_from_verdicts(run):
+ a=run(base,[SOURCE])
+ notes=a['cultural_notes'];assert len(notes)==1
+ n=notes[0];assert n['about']=='observation-2-1' and n['term']=={'ja':'提灯','reading':'chōchin','en':'paper lantern'} and n['consensus']=='agreed'
+ assert [p['consensus']['total'] for p in n['points']]==[3,3] and n['writer']==culture.writer()
+ assert [(r['model'],r['verdict']) for r in n['reviews']]==[(m,'agree') for m in culture.reviewers()]
+ calls={c['tool']:c for c in run.calls}
+ assert calls['Cultural notes · writer']['model']==culture.writer()
+ reviews=[c for c in run.calls if c['tool'].startswith('Cultural review')]
+ assert sorted(c['model'] for c in reviews)==sorted(culture.reviewers()) and all(c['effort']=='low' for c in reviews)
+ # Written after the images are observed, while the claims are still being verified.
+ assert calls['Cultural notes · writer']['start']<calls['Evidence verification']['end']
+ assert 'culture.ready' in [e['type'] for e in store.events('a',0)]
+ assert a['assessments'][0]['status']=='confirmed' and a['status']=='completed'
+
+def test_reviewer_outage_shows_notes_unchecked(run):
+ def replies(tool,data):return RuntimeError('timeout') if tool.startswith('Cultural review') else base(tool,data)
+ a=run(replies);n=a['cultural_notes'][0]
+ assert n['consensus']=='unchecked' and all(r['failed'] for r in n['reviews']) and a['status']=='completed'
+
+def test_writer_outage_is_an_image_limitation(run):
+ def replies(tool,data):return RuntimeError('down') if tool=='Cultural notes · writer' else base(tool,data)
+ a=run(replies)
+ assert a['cultural_notes']==[] and a['limitations'][0]['text']==culture.FAILED[0] and a['status']=='partial'
+ assert not any(c['tool'].startswith('Cultural review') for c in run.calls)
+
+def test_reevaluation_reuses_cultural_notes(run):
+ a=run(base,[SOURCE]);notes=copy.deepcopy(a['cultural_notes']);run.calls.clear()
+ revise(a,stale_claim_ids=['claim-1'],reuse_unaffected=True);a['sources'][0]['active']=False
+ run.again(a)
+ assert not any(c['tool'].startswith('Cultural') for c in run.calls)
+ assert a['cultural_notes']==notes and a['assessments'][0]['status']=='unresolved'

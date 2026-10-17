@@ -1,11 +1,15 @@
 'use client';
-import { useState, useEffect, useRef, FormEvent } from 'react';
+import { useState, useEffect, useRef, FormEvent, Fragment } from 'react';
 import { ArrowUpRight, ArrowRight, Plus, X, Upload, Check, CircleHelp, AlertCircle, ChevronDown, ChevronLeft, ExternalLink, BookOpen, Eye, RefreshCw, Minus, LoaderCircle, History, Network, ShieldCheck } from 'lucide-react';
 import exampleSource from '../public/demo/source.json';
 import credits from '../public/demo/attribution.json';
 import { Lang, Bi, Mode } from './i18n';
 import GraphView from './graph/GraphView';
-import { obsLabel, shortModel, Graph, GNode, Impact } from './graph/model';
+import { obsLabel, shortModel, obsColors, Graph, GNode, Impact } from './graph/model';
+import { ImageStage } from './spotlight';
+import CultureSection, { Note, modelName } from './culture';
+import { usePresent, PresentButton } from './present';
+import ResultStrip, { Jump } from './summary';
 
 type Status='confirmed'|'contradicted'|'unresolved';
 type Asset={id:string;index:number;mime_type:string;width?:number;height?:number};
@@ -17,7 +21,7 @@ type Explanation={id:string;section:string;text:string;text_ja?:string|null;clai
 type Source={id:string;title:string;text:string;url_optional?:string;publisher:string;place?:string;time_start?:string;time_end?:string;active:boolean;origin:string;retrieved_at:string};
 type Run={id:string;tool:string;model_id:string;latency_ms?:number;status:string;started_at?:string};
 type Limitation=string|{text:string;text_ja?:string};
-type Analysis={id:string;revision:number;display_revision:number;status:string;text:string;assets:Asset[];created_at:string;started_at?:string;updated_at:string;claims:Claim[];observations:Observation[];assessments:Assessment[];explanations:Explanation[];sources:Source[];limitations:Limitation[];error?:string;stale_claim_ids?:string[];runs:Run[];changes:{claim_id:string;before:string;before_ja?:string|null;after:string;after_ja?:string|null;from_status:Status;to_status:Status;changed:boolean}[]};
+type Analysis={id:string;revision:number;display_revision:number;status:string;text:string;assets:Asset[];created_at:string;started_at?:string;updated_at:string;claims:Claim[];observations:Observation[];assessments:Assessment[];explanations:Explanation[];sources:Source[];limitations:Limitation[];error?:string;stale_claim_ids?:string[];runs:Run[];cultural_notes?:Note[]|null;changes:{claim_id:string;before:string;before_ja?:string|null;after:string;after_ja?:string|null;from_status:Status;to_status:Status;changed:boolean}[]};
 type Event={event_id:number;revision:number;type:string;timestamp:string;payload:Record<string,unknown>};
 const sampleText='Gion Matsuri is held throughout July. Both photographs were taken in Kyoto in 2026.';
 const sampleImages=['/demo/gion.jpg','/demo/gion-1905.jpg'];
@@ -63,9 +67,11 @@ function Timeline({runs,since,running}:{runs:Run[];since?:string;running:boolean
 export default function Page(){
  const [files,setFiles]=useState<{file:File;url:string}[]>([]),[previewIndex,setPreviewIndex]=useState(0),[text,setText]=useState(''),[isExample,setExample]=useState(false),[mode,setMode]=useState<Mode>('both');
  const [analysis,setAnalysis]=useState<Analysis|null>(null),[selected,setSelected]=useState<string|null>(null),[activeAsset,setActiveAsset]=useState(''),[events,setEvents]=useState<Event[]>([]),[error,setError]=useState(''),[submitting,setSubmitting]=useState(false),[sourceForm,setSourceForm]=useState(false),[showChanges,setShowChanges]=useState(true),[tab,setTab]=useState('meaning'),[,setTick]=useState(0),[title,setTitle]=useState(''),[sourceText,setSourceText]=useState(''),[sourceUrl,setSourceUrl]=useState(''),[publisher,setPublisher]=useState(''),[place,setPlace]=useState(''),[timeStart,setTimeStart]=useState(''),[timeEnd,setTimeEnd]=useState('');
- const [graph,setGraph]=useState<Graph|null>(null),[impact,setImpact]=useState<Impact|null>(null);
+ const [graph,setGraph]=useState<Graph|null>(null),[impact,setImpact]=useState<Impact|null>(null),[hover,setHover]=useState<string[]>([]),[toast,setToast]=useState<{en:string;ja:string;go:()=>void}|null>(null),[noteSel,setNoteSel]=useState<string|null>(null);
+ const toastTimer=useRef<ReturnType<typeof setTimeout>>(undefined);
  const fileInput=useRef<HTMLInputElement>(null),eventSource=useRef<EventSource|null>(null),currentRevision=useRef(0),lastEvent=useRef(0),panel=useRef<HTMLElement>(null),evidenceButton=useRef<HTMLButtonElement>(null),impacts=useRef<Record<string,Impact>>({});
  const running=analysis?.status==='running';
+ const [present,togglePresent]=usePresent();
  useEffect(()=>{try{const v=localStorage.getItem('tsumugi-lang');if(v==='en'||v==='ja'||v==='both')setMode(v)}catch{}},[]);
  function chooseMode(v:Mode){setMode(v);try{localStorage.setItem('tsumugi-lang',v)}catch{}}
  useEffect(()=>{if(!running)return;const timer=setInterval(()=>setTick(x=>x+1),500);return()=>clearInterval(timer)},[running]);
@@ -79,12 +85,26 @@ export default function Page(){
    const event:Event=JSON.parse(message.data);if(event.event_id<=lastEvent.current)return;lastEvent.current=event.event_id;
    if(event.revision<currentRevision.current)return;
    setEvents(items=>[...items,event]);
-   try{const result:Analysis=await api(`/api/analyses/${id}`);if(result.revision>=currentRevision.current){setAnalysis(result);currentRevision.current=result.revision;}}
+   try{const result:Analysis=await api(`/api/analyses/${id}`);if(result.revision>=currentRevision.current){setAnalysis(result);currentRevision.current=result.revision;}if(event.type==='regions.segmented')announce(result,String(event.payload.asset_id));if(event.type==='culture.ready')announceCulture(result);}
    catch(e){setError((e as Error).message)}
    if(event.type==='analysis.completed')es.close();
   };
   es.onerror=async()=>{try{const result:Analysis=await api(`/api/analyses/${id}`);if(result.revision>=currentRevision.current)setAnalysis(result);if(result.status!=='running')es.close();}catch{setError('Connection interrupted. Your saved results will remain available.')}};
  }
+ function announce(a:Analysis,assetId:string){
+  // SAM3 masks arrive seconds after everything else; say so, with the count SAM3 itself produced.
+  const x=a.assets.find(x=>x.id===assetId);if(!x)return;
+  const objects=a.observations.filter(o=>o.asset_id===assetId&&o.mask).reduce((n,o)=>n+(o.mask?.instance_count||0),0);if(!objects)return;
+  const run=a.runs.filter(r=>r.tool===`Image segmentation · ${x.index}`&&r.latency_ms).at(-1),sec=run?` · ${(run.latency_ms!/1000).toFixed(1)}s`:'';
+  say({en:`SAM3 segmented ${objects} object${objects===1?'':'s'} in image ${x.index} locally${sec}`,ja:`SAM3 が画像${x.index}からローカルで${objects}個の物体を切り出しました${sec.replace('s','秒')}`,go:()=>setActiveAsset(assetId)});
+ }
+ function announceCulture(a:Analysis){
+  const n=a.cultural_notes?.[0];if(!n)return;
+  const checked=n.reviews.filter(r=>!r.failed).map(r=>modelName(r.model));
+  const count=a.cultural_notes!.length;
+  say({en:`${count} cultural note${count===1?'':'s'} written by ${modelName(n.writer)}${checked.length?`, checked by ${checked.join(' and ')}`:''}`,ja:`${modelName(n.writer)} が文化の解説を${count}件書き${checked.length?`、${checked.join('と')}が確認しました`:'ました'}`,go:()=>jump('culture')});
+ }
+ function say(t:{en:string;ja:string;go:()=>void}){setToast(t);clearTimeout(toastTimer.current);toastTimer.current=setTimeout(()=>setToast(null),7000)}
  function addFiles(list:File[]){
   const ok=list.filter(f=>['image/jpeg','image/png'].includes(f.type)&&f.size<=10*1024*1024);
   if(ok.length<list.length)setError('Choose JPEG or PNG images up to 10 MB each.');else setError('');
@@ -97,7 +117,7 @@ export default function Page(){
  function removeFile(i:number){URL.revokeObjectURL(files[i].url);const next=files.filter((_,j)=>j!==i);setFiles(next);setPreviewIndex(p=>Math.min(p,Math.max(0,next.length-1)));if(!next.length)setExample(false)}
  async function useExample(){setError('');try{const blobs=await Promise.all(sampleImages.map(async u=>(await fetch(u)).blob()));files.forEach(f=>URL.revokeObjectURL(f.url));setFiles(blobs.map((b,i)=>{const file=new File([b],`example-${i+1}.jpg`,{type:'image/jpeg'});return {file,url:URL.createObjectURL(file)}}));setPreviewIndex(0);setText(sampleText);setExample(true)}catch{setError('The example images could not be loaded.')}}
  async function start(e:FormEvent){e.preventDefault();if(!files.length)return;setSubmitting(true);setError('');try{const form=new FormData();files.forEach(f=>form.append('images',f.file));form.append('text',text);form.append('locale','en');const result=await api('/api/analyses',{method:'POST',body:form});lastEvent.current=0;setEvents([]);setGraph(null);impacts.current={};const a:Analysis=await api(`/api/analyses/${result.analysis_id}`);setAnalysis(a);setActiveAsset(a.assets[0]?.id||'');subscribe(result.analysis_id,result.revision);}catch(e){setError((e as Error).message)}finally{setSubmitting(false)}}
- function reset(){eventSource.current?.close();setAnalysis(null);setSelected(null);setEvents([]);setError('');setSourceForm(false);setGraph(null);setImpact(null);lastEvent.current=0;}
+ function reset(){eventSource.current?.close();setAnalysis(null);setSelected(null);setNoteSel(null);setEvents([]);setError('');setSourceForm(false);setGraph(null);setImpact(null);lastEvent.current=0;}
  const selectedExplanation=analysis?.explanations.find(e=>e.id===selected);
  const selectedClaim=analysis?.claims.find(c=>c.id===selected||selectedExplanation?.claim_ids.includes(c.id));
  const assessment=analysis?.assessments.find(a=>a.claim_id===selectedClaim?.id);
@@ -105,6 +125,16 @@ export default function Page(){
  // Selecting an observation on another image switches the large view to that image.
  useEffect(()=>{if(observation)setActiveAsset(observation.asset_id)},[observation?.id]);
  const linked=new Set(selectedClaim?.observation_ids||[]);
+ const colors=obsColors(analysis?.observations.map(o=>o.id)||[]);
+ // Spotlit observations: what the pointer is on, else the selected observation or the selected claim's linked ones.
+ const noteOn=analysis?.cultural_notes?.find(n=>n.id===noteSel);
+ const spot=new Set(hover.length?hover:noteOn?.about?[noteOn.about]:observation&&!selectedClaim?[observation.id]:[...linked]);
+ useEffect(()=>{if(selected)setNoteSel(null)},[selected]);
+ function chooseNote(n:Note){
+  // A cultural note spotlights the object it explains: SAM3, the models and the image meet in one gesture.
+  setNoteSel(v=>v===n.id?null:n.id);setSelected(null);
+  const o=analysis?.observations.find(o=>o.id===n.about);if(o)setActiveAsset(o.asset_id);
+ }
  const stale=new Set(running?analysis?.stale_claim_ids||[]:[]);
  const impacted=new Set(impact?.claim_ids||[]);
  function closePanel(){setSelected(null);evidenceButton.current?.focus()}
@@ -131,8 +161,13 @@ export default function Page(){
  const asset=analysis?.assets.find(a=>a.id===activeAsset)||analysis?.assets[0];
  const preview=files[previewIndex]?.url;
  const viewTab=tab==='original'?'meaning':tab;
+ function jump(to:Jump){
+  if(to==='context'||to==='unknown'||to==='culture')setTab('meaning');
+  if(to==='activity'){const d=document.getElementById('jump-activity');if(d instanceof HTMLDetailsElement)d.open=true}
+  requestAnimationFrame(()=>document.getElementById('jump-'+to)?.scrollIntoView({behavior:'smooth',block:'start'}));
+ }
  return <Lang.Provider value={mode}><div className="app-shell">
-  <header className="header"><Logo/><span className="header-note">WEAVING CONTEXT, BEYOND TRANSLATION</span><div className="header-right"><div className="lang-switch" role="group" aria-label="Display language">{([['en','EN'],['ja','日本語'],['both','Both']] as [Mode,string][]).map(([v,l])=><button key={v} className={mode===v?'active':''} aria-pressed={mode===v} onClick={()=>chooseMode(v)}>{l}</button>)}</div><span className="aiand">with <b>ai&</b></span></div></header>
+  <header className="header"><Logo/><span className="header-note">WEAVING CONTEXT, BEYOND TRANSLATION</span><div className="header-right"><div className="lang-switch" role="group" aria-label="Display language">{([['en','EN'],['ja','日本語'],['both','Both']] as [Mode,string][]).map(([v,l])=><button key={v} className={mode===v?'active':''} aria-pressed={mode===v} onClick={()=>chooseMode(v)}>{l}</button>)}</div><PresentButton on={present} toggle={togglePresent}/><span className="aiand">with <b>ai&</b></span></div></header>
   {!analysis?<main className="landing">
    <div className="hero-top"><div className="overline"><span className="tiny-line"/> LOOK CLOSER. UNDERSTAND MORE.</div><span className="issue">FIELD NOTES / 001</span></div>
    <div className="hero-title"><h1>There’s more<br/>to the <em>picture.</em></h1><div className="hero-description"><span className="japanese" aria-hidden="true">紡ぐ</span><p><Bi en={<>A photograph tells part of a story.<br/>Uncover the context, follow the evidence,<br/>and leave room for what’s still unknown.</>} ja="写真が語るのは物語の一部です。文脈を掘り起こし、根拠をたどり、まだ分からないことには余白を残します。"/></p></div></div>
@@ -157,22 +192,24 @@ export default function Page(){
    <div className="landing-bottom"><span>FROM IMAGE TO UNDERSTANDING</span><p>Not every detail has an answer.<br/><em>Every explanation should have a reason.</em></p><span className="weave-caption">観察 → 文脈 → 理解</span></div>
   </main>:<main className={'workspace '+(selected?'panel-open ':'')+(viewTab==='graph'?'view-graph':'')}>
    <div className="workspace-heading"><div><button className="back-link" onClick={reset} disabled={running}><ChevronLeft size={14}/> New analysis</button><h1><Bi en={<>A closer look<span className="dot">.</span></>} ja="もう少し、よく見る。"/></h1></div><div className="workspace-meta"><span className={'live-state '+(running?'is-running':'')}><span/>{running?'Weaving context':analysis.status==='failed'?'Needs attention':analysis.status==='partial'?'Ready with limitations':'Ready to explore'}</span><span className="revision">REVISION {analysis.revision.toString().padStart(2,'0')}</span><button className="button outline small" ref={evidenceButton} onClick={()=>{setSelected('sources');setSourceForm(true)}} disabled={running}><Plus size={15}/> Add evidence</button></div></div>
+   <ResultStrip a={analysis} running={running} elapsed={elapsed} onJump={jump}/>
    <nav className="mobile-tabs" aria-label="Result views">{(['original','meaning','graph'] as const).map(t=><button key={t} className={tab===t?'active':''} onClick={()=>setTab(t)}><Tx k={t} inline/></button>)}</nav>
    {error&&<div className="error" role="alert">{error}</div>}
    {analysis.error&&<div className="error" role="alert"><AlertCircle size={18}/><span>{analysis.error} {analysis.display_revision>0&&`Showing verified revision ${analysis.display_revision}.`}</span><button className="text-button" disabled={submitting} onClick={()=>mutate('retry',{expected_revision:analysis.revision})}><RefreshCw size={14}/> Retry</button></div>}
    {running&&analysis.display_revision>0&&<div className="updating" role="status"><LoaderCircle className="spin" size={15}/> <Tx k="updating"/></div>}
    <div className="result-grid">
     <section className={'original-column '+(tab==='original'?'mobile-visible':'')}><div className="section-label"><span>01 / ORIGINAL</span><span>THE STARTING POINT</span></div>
-     {asset&&<div className="result-image"><img src={`/api/analyses/${analysis.id}/assets/${asset.id}`} alt={`Image ${asset.index} under analysis`}/>{analysis.observations.filter(o=>o.mask&&o.asset_id===asset.id).map(o=>{const url=`url(/api/analyses/${analysis.id}/masks/${o.id})`;return <span key={'mask-'+o.id} aria-hidden="true" className={'mask '+(observation?.id===o.id?'chosen ':'')+(linked.has(o.id)?'linked':'')} style={{maskImage:url,WebkitMaskImage:url}}/>})}{analysis.observations.filter(o=>o.bbox&&o.asset_id===asset.id).map(o=><button key={o.id} className={'region '+(o.mask?'masked ':'')+(observation?.id===o.id?'chosen ':'')+(linked.has(o.id)?'linked':'')} style={{left:`${o.bbox![0]*100}%`,top:`${o.bbox![1]*100}%`,width:`${o.bbox![2]*100}%`,height:`${o.bbox![3]*100}%`}} aria-label={`Inspect: ${o.text}`} onClick={()=>setSelected(o.id)}><span>{obsLabel(o.id)}</span></button>)}<span className="image-tag"><ImageLabel n={asset.index}/></span></div>}
+     {asset&&<ImageStage src={`/api/analyses/${analysis.id}/assets/${asset.id}`} maskUrl={id=>`/api/analyses/${analysis.id}/masks/${id}`} obs={analysis.observations.filter(o=>o.asset_id===asset.id)} colors={colors} spot={spot} chosen={observation?.id} ratio={asset.width&&asset.height?asset.width/asset.height:undefined} onSelect={setSelected} onHover={id=>setHover(id?[id]:[])}><span className="image-tag"><ImageLabel n={asset.index}/></span></ImageStage>}
      {analysis.assets.length>1&&<div className="asset-strip">{analysis.assets.map(x=>{const count=analysis.observations.filter(o=>o.asset_id===x.id&&linked.has(o.id)).length;return <button key={x.id} className={x.id===asset?.id?'active':''} onClick={()=>setActiveAsset(x.id)} aria-label={`Show image ${x.index}`}><img src={`/api/analyses/${analysis.id}/assets/${x.id}`} alt=""/><span><ImageLabel n={x.index}/></span>{count>0&&<b className="link-count" title="Candidate regions linked to the selected claim">{count}</b>}</button>})}</div>}
      {isExample&&asset&&credits[asset.index-1]&&<p className="photo-credit">{credits[asset.index-1].author} · <a href={credits[asset.index-1].source_url} target="_blank" rel="noreferrer">Source</a> · <a href={credits[asset.index-1].license_url} target="_blank" rel="noreferrer">{credits[asset.index-1].license}</a></p>}
-     <div className="original-caption"><div className="section-label"><span><Tx k="originalWords" inline/></span><span>{analysis.claims.length} CLAIMS</span></div><p>“{selectedClaim?<>{Array.from(analysis.text).slice(0,selectedClaim.input_start).join('')}<mark>{Array.from(analysis.text).slice(selectedClaim.input_start,selectedClaim.input_end).join('')}</mark>{Array.from(analysis.text).slice(selectedClaim.input_end).join('')}</>:analysis.text}”</p>{isExample&&<span className="synthetic-label">SYNTHETIC DEMO CAPTION</span>}<div className="claim-list">{analysis.claims.map((c,i)=><button key={c.id} className={(selectedClaim?.id===c.id?'selected ':'')+(impacted.has(c.id)?'impacted':'')} onClick={()=>setSelected(c.id)}><span>{String(i+1).padStart(2,'0')}</span><span className="claim-text"><Bi en={c.text} ja={c.text_ja}/>{stale.has(c.id)&&<Stale/>}</span><ArrowUpRight size={14}/></button>)}</div></div>
+     <div className="original-caption"><div className="section-label"><span><Tx k="originalWords" inline/></span><span>{analysis.claims.length} CLAIMS</span></div><p>“{selectedClaim?<>{Array.from(analysis.text).slice(0,selectedClaim.input_start).join('')}<mark>{Array.from(analysis.text).slice(selectedClaim.input_start,selectedClaim.input_end).join('')}</mark>{Array.from(analysis.text).slice(selectedClaim.input_end).join('')}</>:analysis.text}”</p>{isExample&&<span className="synthetic-label">SYNTHETIC DEMO CAPTION</span>}<div className="claim-list" id="jump-claims">{analysis.claims.map((c,i)=><button key={c.id} className={(selectedClaim?.id===c.id?'selected ':'')+(impacted.has(c.id)?'impacted':'')} onClick={()=>setSelected(c.id)} onMouseEnter={()=>setHover(c.observation_ids||[])} onMouseLeave={()=>setHover([])}><span>{String(i+1).padStart(2,'0')}</span><span className="claim-text"><Bi en={c.text} ja={c.text_ja}/>{stale.has(c.id)&&<Stale/>}</span><ArrowUpRight size={14}/></button>)}</div></div>
      <p className="region-note"><Tx k={selectedClaim&&linked.size?'linkNote':analysis.observations.some(o=>o.mask)?'maskNote':analysis.observations.some(o=>o.bbox)?'regionNote':'noRegion'}/></p>
     </section>
     <section className={'meaning-column '+(tab!=='original'?'mobile-visible':'')}><div className="section-label view-switch"><span>02 / {viewTab==='graph'?'GRAPH':'MEANING'}</span><span className="segmented" role="group" aria-label="Center view">{(['meaning','graph'] as const).map(v=><button key={v} className={viewTab===v?'active':''} aria-pressed={viewTab===v} onClick={()=>setTab(v)}>{v==='graph'&&<Network size={12}/>}<Tx k={v} inline/></button>)}</span></div>
      {viewTab==='graph'?<GraphView analysis={analysis} graph={graph} running={running} focus={focusNode} impact={impact} compact={!!selected} busy={submitting} onPick={pickNode} onImpact={sid=>sid?showImpact(sid):setImpact(null)} onToggleSource={(sid,active)=>mutate(`sources/${sid}`,{active,expected_revision:analysis.revision},'PATCH')}/>:<>
      {analysis.changes.length>0&&<div className="changes"><button className="changes-heading" onClick={()=>setShowChanges(!showChanges)}><span><History size={17}/> <Tx k="changed" inline/> <b>{analysis.changes.filter(c=>c.changed).length}</b></span><ChevronDown size={17} style={{transform:showChanges?'rotate(180deg)':''}}/></button>{showChanges&&<div className="changes-body">{analysis.changes.map(c=><div key={c.claim_id} className="change-item"><div className="change-status"><Badge status={c.from_status}/><ArrowRight size={13}/><Badge status={c.to_status}/></div>{c.changed?<><p className="before"><Minus size={13}/><Bi en={c.before} ja={c.before_ja}/></p><p className="after"><Plus size={13}/><Bi en={c.after} ja={c.after_ja}/></p></>:<p><Tx k="stillUnresolved"/></p>}<button className="text-button" onClick={()=>setSelected(c.claim_id)}><Tx k="seeWhy" inline/> <ArrowUpRight size={14}/></button></div>)}</div>}</div>}
-     {(['see','context','unknown'] as const).map((section,index)=><div className={'meaning-section '+section} key={section}><div className="meaning-title"><span>{String(index+1).padStart(2,'0')}</span><h2><Tx k={section}/></h2>{section==='see'?<Eye size={18}/>:section==='context'?<BookOpen size={18}/>:<CircleHelp size={18}/>}</div><div className="explanation-list">{(section==='see'&&running&&!results.some(e=>e.section==='see')?analysis.observations.map(o=>({id:o.id,section:'see',text:o.text,text_ja:o.text_ja,claim_ids:[],support_ids:[{id:o.id,type:'Observation',revision:analysis.revision}]} as Explanation)):results.filter(e=>e.section===section)).map(e=>{const a=analysis.assessments.find(a=>e.claim_ids.includes(a.claim_id));const o=analysis.observations.find(o=>e.support_ids.some(s=>s.id===o.id));return <button className={'explanation '+(selected===e.id?'selected ':'')+(e.claim_ids.some(c=>impacted.has(c))?'impacted':'')} key={e.id} onClick={()=>setSelected(e.id)}><span className="explanation-badges">{a?<Badge status={a.status}/>:<span className="observation-label"><Tx k="visual" inline/>{o&&<> · <ImageLabel n={Number(o.id.split('-')[1])}/> · {obsLabel(o.id)}</>}</span>}{e.claim_ids.some(c=>stale.has(c))&&<Stale/>}</span><p><Bi en={e.text} ja={e.text_ja}/></p><span className="explanation-link">{section==='see'?<Tx k="locate" inline/>:<Tx k="follow" inline/>} <ArrowUpRight size={14}/>{e.check&&<span className={'check-note '+e.check.verdict}><ShieldCheck size={12}/>{e.check.verdict==='accepted'?<><Tx k="checked" inline/> · {shortModel(e.check.model_id)}</>:<Tx k="rejected" inline/>}</span>}</span></button>})}{!results.some(e=>e.section===section)&&!(section==='see'&&analysis.observations.length)&&(running?<div className="pending"><span className="skeleton"/><span className="skeleton short"/><p>{section==='see'?'Looking at the images…':section==='context'?'Connecting claims and sources…':'Checking what remains uncertain…'}</p></div>:<p className="empty-section">{section==='context'?'Add a source to explore the cultural context.':section==='unknown'?'No unresolved claims in the current evidence scope.':'No image observations available.'}</p>)}</div></div>)}
+     {(['see','context','unknown'] as const).map((section,index)=><Fragment key={section}><div className={'meaning-section '+section} id={'jump-'+section}><div className="meaning-title"><span>{String(index+1).padStart(2,'0')}</span><h2><Tx k={section}/></h2>{section==='see'?<Eye size={18}/>:section==='context'?<BookOpen size={18}/>:<CircleHelp size={18}/>}</div><div className="explanation-list">{(section==='see'&&running&&!results.some(e=>e.section==='see')?analysis.observations.map(o=>({id:o.id,section:'see',text:o.text,text_ja:o.text_ja,claim_ids:[],support_ids:[{id:o.id,type:'Observation',revision:analysis.revision}]} as Explanation)):results.filter(e=>e.section===section)).map(e=>{const a=analysis.assessments.find(a=>e.claim_ids.includes(a.claim_id));const o=analysis.observations.find(o=>e.support_ids.some(s=>s.id===o.id));const lights=o?[o.id]:analysis.claims.filter(c=>e.claim_ids.includes(c.id)).flatMap(c=>c.observation_ids||[]);return <button className={'explanation '+(selected===e.id?'selected ':'')+(e.claim_ids.some(c=>impacted.has(c))?'impacted ':'')+(o?'has-color':'')} style={o?{'--c':colors[o.id]} as React.CSSProperties:undefined} key={e.id} onClick={()=>setSelected(e.id)} onMouseEnter={()=>setHover(lights)} onMouseLeave={()=>setHover([])}><span className="explanation-badges">{a?<Badge status={a.status}/>:<span className="observation-label"><Tx k="visual" inline/>{o&&<> · <ImageLabel n={Number(o.id.split('-')[1])}/> · <i className="swatch" style={{background:colors[o.id]}}/>{obsLabel(o.id)}{o.label&&<> · {o.mask&&o.mask.instance_count>1?`${o.mask.instance_count} × `:''}{o.label}</>}</>}</span>}{e.claim_ids.some(c=>stale.has(c))&&<Stale/>}</span><p><Bi en={e.text} ja={e.text_ja}/></p><span className="explanation-link">{section==='see'?<Tx k="locate" inline/>:<Tx k="follow" inline/>} <ArrowUpRight size={14}/>{e.check&&<span className={'check-note '+e.check.verdict}><ShieldCheck size={12}/>{e.check.verdict==='accepted'?<><Tx k="checked" inline/> · {shortModel(e.check.model_id)}</>:<Tx k="rejected" inline/>}</span>}</span></button>})}{!results.some(e=>e.section===section)&&!(section==='see'&&analysis.observations.length)&&(running?<div className="pending"><span className="skeleton"/><span className="skeleton short"/><p>{section==='see'?'Looking at the images…':section==='context'?'Connecting claims and sources…':'Checking what remains uncertain…'}</p></div>:<p className="empty-section">{section==='context'?'Add a source to explore the cultural context.':section==='unknown'?'No unresolved claims in the current evidence scope.':'No image observations available.'}</p>)}</div></div>
+      {section==='see'&&(analysis.observations.length>0||!!analysis.cultural_notes?.length)&&<CultureSection notes={analysis.cultural_notes} observations={analysis.observations} assets={analysis.assets} colors={colors} assetUrl={id=>`/api/analyses/${analysis.id}/assets/${id}`} maskUrl={id=>`/api/analyses/${analysis.id}/masks/${id}`} chosen={noteSel} running={running} onChoose={chooseNote} onHover={n=>setHover(n?.about?[n.about]:[])}/>}</Fragment>)}
      </>}
      {analysis.limitations.map(l=>{const v=typeof l==='string'?{text:l}:l;return <p key={v.text} className="limitation"><CircleHelp size={15}/><Bi en={v.text} ja={v.text_ja}/></p>})}
      <p className="scope-note"><Tx k="scope"/></p>
@@ -188,8 +225,9 @@ export default function Page(){
      </>}
     </aside>}
    </div>
-   <details className="activity" open><summary><span><span className={'activity-dot '+(running?'working':'')}/>{running&&(!events.length||events.at(-1)?.type==='analysis.completed')?'Starting analysis':(events.at(-1)?.payload.tool?String(events.at(-1)?.payload.tool):eventLabels[events.at(-1)?.type||''])||'Activity'}</span><span>{running?`${elapsed}s elapsed`:`${analysis.runs.length} model calls`}<ChevronDown size={14}/></span></summary><div className="activity-body"><Timeline runs={analysis.runs} since={analysis.started_at} running={running}/><details className="activity-log"><summary>Event log · {events.length}</summary>{events.map(e=><div key={e.event_id}><time>{new Date(e.timestamp).toLocaleTimeString()}</time><span>{e.payload.tool?`${String(e.payload.tool)} · ${e.type.split('.')[1]}`:eventLabels[e.type]||e.type}</span><small>rev {e.revision}</small></div>)}</details></div></details>
+   <details className="activity" id="jump-activity" open><summary><span><span className={'activity-dot '+(running?'working':'')}/>{running&&(!events.length||events.at(-1)?.type==='analysis.completed')?'Starting analysis':(events.at(-1)?.payload.tool?String(events.at(-1)?.payload.tool):eventLabels[events.at(-1)?.type||''])||'Activity'}</span><span>{running?`${elapsed}s elapsed`:`${analysis.runs.length} model calls`}<ChevronDown size={14}/></span></summary><div className="activity-body"><Timeline runs={analysis.runs} since={analysis.started_at} running={running}/><details className="activity-log"><summary>Event log · {events.length}</summary>{events.map(e=><div key={e.event_id}><time>{new Date(e.timestamp).toLocaleTimeString()}</time><span>{e.payload.tool?`${String(e.payload.tool)} · ${e.type.split('.')[1]}`:eventLabels[e.type]||e.type}</span><small>rev {e.revision}</small></div>)}</details></div></details>
   </main>}
+  {toast&&<button className="toast" role="status" onClick={()=>{toast.go();setToast(null)}}><span className="toast-dot"/><Bi en={toast.en} ja={toast.ja}/></button>}
   <footer className="footer"><span>TSUMUGI <span className="footer-dot">·</span> A LITTLE MORE UNDERSTANDING.</span><span>BUILT WITH ai& <span className="footer-dot">/</span> TOKYO, 2026</span></footer>
  </div></Lang.Provider>
 }
