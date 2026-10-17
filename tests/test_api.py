@@ -9,6 +9,7 @@ def client(tmp_path,monkeypatch):
  monkeypatch.setattr(store,'DATA',tmp_path)
  async def replay():pass
  monkeypatch.setattr(graph,'replay',replay)
+ monkeypatch.setattr(graph,'ensure_schema',lambda:None)
  main.tasks.clear()
  async def process(a):
   a['status']='completed';a['display_revision']=a['revision'];store.save(a);store.snapshot(a);store.event(a,'analysis.completed')
@@ -17,12 +18,33 @@ def client(tmp_path,monkeypatch):
 
 def photo():
  f=io.BytesIO();Image.new('RGB',(20,20),'red').save(f,'JPEG');return f.getvalue()
-def create(c):
- r=c.post('/api/analyses',files={'image':('x.jpg',photo(),'image/jpeg')},data={'text':'A festival in July.'});assert r.status_code==202;return r.json()['analysis_id']
+def create(c,count=1):
+ r=c.post('/api/analyses',files=[('images',(f'x{i}.jpg',photo(),'image/jpeg')) for i in range(count)],data={'text':'A festival in July.'});assert r.status_code==202;return r.json()['analysis_id']
 def test_invalid_inputs(client):
- assert client.post('/api/analyses',files={'image':('x.jpg',b'invalid','image/jpeg')},data={'text':'hello'}).status_code==415
- assert client.post('/api/analyses',files={'image':('x.jpg',b'x'*(10*1024*1024+1),'image/jpeg')},data={'text':'hello'}).status_code==413
- assert client.post('/api/analyses',files={'image':('x.jpg',photo(),'image/jpeg')},data={'text':'x'*5001}).status_code==422
+ assert client.post('/api/analyses',files={'images':('x.jpg',b'invalid','image/jpeg')},data={'text':'hello'}).status_code==415
+ assert client.post('/api/analyses',files={'images':('x.jpg',b'x'*(10*1024*1024+1),'image/jpeg')},data={'text':'hello'}).status_code==413
+ assert client.post('/api/analyses',files={'images':('x.jpg',photo(),'image/jpeg')},data={'text':'x'*5001}).status_code==422
+
+def test_multiple_images(client):
+ aid=create(client,3);a=client.get(f'/api/analyses/{aid}').json()
+ assert [x['index'] for x in a['assets']]==[1,2,3];assert len({x['id'] for x in a['assets']})==3
+ for x in a['assets']:assert client.get(f"/api/analyses/{aid}/assets/{x['id']}").status_code==200
+ assert (store.DATA/f'{aid}-3-model.jpg').exists()
+ one=create(client);assert store.get(one)['input_hash']!=a['input_hash']
+
+def test_image_limits(client):
+ files=[('images',(f'x{i}.jpg',photo(),'image/jpeg')) for i in range(5)]
+ assert client.post('/api/analyses',files=files,data={'text':'hello'}).status_code==422
+ # One bad image rejects the whole request before anything is stored.
+ files=[('images',('a.jpg',photo(),'image/jpeg')),('images',('b.jpg',b'invalid','image/jpeg'))]
+ assert client.post('/api/analyses',files=files,data={'text':'hello'}).status_code==415
+ assert not list(store.DATA.glob('*.jpg'))
+
+def test_asset_of_other_analysis_rejected(client):
+ first=create(client);second=create(client)
+ other=store.get(second)['assets'][0]['id']
+ assert client.get(f'/api/analyses/{first}/assets/{other}').status_code==404
+ assert client.get(f'/api/analyses/{first}/assets/..%2Ftsumugi.sqlite').status_code==404
 
 def test_revision_and_idempotency(client):
  aid=create(client)
