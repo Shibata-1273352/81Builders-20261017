@@ -55,7 +55,7 @@ class Job:
  """Segments each image's boxed observations with SAM3 while the rest of the analysis runs."""
  def __init__(self,a,limit):
   self.a=a;self.limit=limit;self.started=time.monotonic();self.warm={};self.tasks={}
-  self.on=enabled() and not a['claims']
+  self.on=enabled() and not a.get('display_revision')
   # Image encoding dominates (about 7 s per image on an M4), so it starts before the VLM has answered.
   if self.on:self.warm={x['id']:asyncio.ensure_future(post('/encode',{'image':model_name(a,x)},40)) for x in a['assets']}
   for t in self.warm.values():t.add_done_callback(lambda t:t.cancelled() or t.exception())
