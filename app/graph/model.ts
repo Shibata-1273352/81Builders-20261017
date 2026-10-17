@@ -29,7 +29,7 @@ function scopeChips(s?:GNode){
  const a=str(s.time_start),b=str(s.time_end);
  return [str(s.place),a&&b&&a!==b?`${a}–${b}`:a||b].filter(Boolean) as string[];
 }
-export type ObsView={id:string;assetId:string;assetIndex:number;text:string;text_ja?:string;crop:number[]|null;model?:string;regionModel?:string;node:GNode};
+export type ObsView={id:string;assetId:string;assetIndex:number;text:string;text_ja?:string;crop:number[]|null;masked:boolean;model?:string;regionModel?:string;node:GNode};
 export type PassageView={id:string;quote:string;quote_ja?:string;stance:string;scopeMatch:boolean;sourceId:string;node:GNode};
 export type Column={id:string;claim:GNode;text:string;text_ja?:string;kind:string;scope:string[];model?:string;
  assessment?:GNode;status?:Status;reason?:string;reason_ja?:string;assessModel?:string;
@@ -54,7 +54,7 @@ export function buildView(g:Graph):View{
  for(const o of of('Observation')){
   const region=byId.get(to(o.id,'GROUNDS')[0]?.source||'');
   const asset=assetOf.get(String(o.asset_id||region?.asset_id||''))||assetOf.get(to(region?.id||'','HAS_REGION')[0]?.source||'');
-  const view:ObsView={id:o.id,assetId:asset?.id||'',assetIndex:asset?.index||0,text:String(o.text||o.name||''),text_ja:str(o.text_ja),crop:cropBox(region?.bbox_normalized??o.bbox,region?.mask??o.mask),model:model(o.id),regionModel:region?model(region.id):undefined,node:o};
+  const view:ObsView={id:o.id,assetId:asset?.id||'',assetIndex:asset?.index||0,text:String(o.text||o.name||''),text_ja:str(o.text_ja),crop:cropBox(region?.bbox_normalized??o.bbox,region?.mask??o.mask),masked:Boolean(region?.segmenter||region?.mask||o.mask),model:model(o.id),regionModel:region?model(region.id):undefined,node:o};
   asset?.observations.push(view);
  }
  const columns:Column[]=of('Claim').map(c=>{
@@ -100,9 +100,11 @@ export function draftGraph(a:DraftInput):Graph{
  for(const x of a.assets)node('Asset',x.id,{name:`Image ${x.index}`,index:x.index,mime_type:x.mime_type});
  for(const o of a.observations){
   const region='region-'+o.id;
-  node('Region',region,{bbox_normalized:o.bbox,mask:o.mask,asset_id:o.asset_id});
+  // A SAM3 mask arrives as metadata; the PNG itself is served separately.
+  const m=(o.mask&&typeof o.mask==='object'&&!Array.isArray(o.mask)?o.mask:{}) as Record<string,unknown>;
+  node('Region',region,{bbox_normalized:o.bbox,asset_id:o.asset_id,segmenter:m.segmenter,mask_score:m.score});
   node('Observation',o.id,{text:o.text,text_ja:o.text_ja,asset_id:o.asset_id});
-  edge('HAS_REGION',o.asset_id,region);edge('GROUNDS',region,o.id);generated(o.id,o.run_id);
+  edge('HAS_REGION',o.asset_id,region);edge('GROUNDS',region,o.id);generated(o.id,o.run_id);generated(region,m.run_id as string|undefined);
  }
  for(const c of a.claims){
   node('Claim',c.id,{text:c.text,text_ja:c.text_ja,kind:c.kind});

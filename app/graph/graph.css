@@ -66,7 +66,8 @@ button.gcard:hover,.gcard:has(>.gmain:hover){border-color:#bdbfb2}
 .gmark.removed{background:#d9d8cf;color:#5b5e55;margin-left:0}
 
 .gobs{display:flex;gap:8px;align-items:flex-start;width:auto;flex:1 1 200px;min-width:0;max-width:100%;padding:6px 8px}
-.gcrop{flex:none;width:42px;height:42px;background-repeat:no-repeat;background-color:#e6e5db;border:1px solid var(--line)}
+.gcrop{position:relative;flex:none;width:42px;height:42px;background-repeat:no-repeat;background-color:#e6e5db;border:1px solid var(--line)}
+.gcrop-mask{position:absolute;inset:0;background:#f0ae61;opacity:.6;-webkit-mask-repeat:no-repeat;mask-repeat:no-repeat}
 .gobs-body{min-width:0;font-size:11px}
 .gobs .glabel{margin-bottom:2px}
 

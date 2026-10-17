@@ -34,12 +34,15 @@ function Mark({ids,diff}:{ids:(string|undefined)[];diff:Diff|null}){
  return <span className="gmark changed"><Bi en={c.field==='check_verdict'?`${f[0]}: ${c.to||'none'}`:f[0]} ja={c.field==='check_verdict'?`${f[1]}：${c.to||'なし'}`:f[1]} inline/></span>;
 }
 
-function Crop({src,o,w,h}:{src:string;o:ObsView;w?:number;h?:number}){
+function Crop({src,mask,o,w,h}:{src:string;mask?:string;o:ObsView;w?:number;h?:number}){
  // Shows the observed region with CSS background positioning; widened to a square when the image size is known.
  let box=o.crop;
  if(box&&w&&h){const px=Math.max(box[2]*w,box[3]*h);const bw=Math.min(1,px/w),bh=Math.min(1,px/h);box=[Math.min(Math.max(0,box[0]+box[2]/2-bw/2),1-bw),Math.min(Math.max(0,box[1]+box[3]/2-bh/2),1-bh),bw,bh]}
- const style=box?{backgroundImage:`url(${src})`,backgroundSize:`${100/box[2]}% ${100/box[3]}%`,backgroundPosition:`${box[2]<1?box[0]/(1-box[2])*100:0}% ${box[3]<1?box[1]/(1-box[3])*100:0}%`}:{backgroundImage:`url(${src})`,backgroundSize:'cover',backgroundPosition:'center'};
- return <span className={'gcrop'+(box?'':' whole')} style={style} aria-hidden="true"/>;
+ const size=box?`${100/box[2]}% ${100/box[3]}%`:'100% 100%',pos=box?`${box[2]<1?box[0]/(1-box[2])*100:0}% ${box[3]<1?box[1]/(1-box[3])*100:0}%`:'center';
+ const style=box?{backgroundImage:`url(${src})`,backgroundSize:size,backgroundPosition:pos}:{backgroundImage:`url(${src})`,backgroundSize:'cover',backgroundPosition:'center'};
+ // The SAM3 mask PNG covers the whole image, so it is cropped with the same size and position as the photo.
+ const m=mask?`url(${mask})`:'';
+ return <span className={'gcrop'+(box?'':' whole')} style={style} aria-hidden="true">{mask&&box&&<span className="gcrop-mask" style={{maskImage:m,WebkitMaskImage:m,maskSize:size,WebkitMaskSize:size,maskPosition:pos,WebkitMaskPosition:pos}}/>}</span>;
 }
 
 export default function GraphView({analysis,graph,running,focus,impact,compact,busy,onPick,onImpact,onToggleSource}:Props){
@@ -180,7 +183,7 @@ export default function GraphView({analysis,graph,running,focus,impact,compact,b
        <img src={assetUrl(a.id)} alt="" onLoad={schedule}/><span><Bi en={`Image ${a.index}`} ja={`画像${a.index}`} inline/></span>{!compact&&models.map(m=><Chip key={m} tone="model">{m}</Chip>)}
       </button>
       <div className="gobs-list">{a.observations.map(o=><button key={o.id} className={'gmain gcard gobs'+dim(o.id)+(diff?.added.has(o.id)?' is-new':'')} data-node={o.id} onClick={()=>onPick(o.node)} aria-label={both(`Observation ${obsLabel(o.id)}: ${o.text}`,`観察 ${obsLabel(o.id)}：${o.text_ja||o.text}`)}>
-       <Crop src={assetUrl(a.id)} o={o} w={Number(a.node.width)||undefined} h={Number(a.node.height)||undefined}/>
+       <Crop src={assetUrl(a.id)} mask={o.masked?`/api/analyses/${analysis.id}/masks/${o.id}`:undefined} o={o} w={Number(a.node.width)||undefined} h={Number(a.node.height)||undefined}/>
        <span className="gobs-body"><span className="glabel">{obsLabel(o.id)}{o.regionModel&&o.regionModel!==o.model&&<Chip tone="model">{o.regionModel}</Chip>}<Mark ids={[o.id]} diff={diff}/></span><span className="gclamp two"><Bi en={o.text} ja={o.text_ja}/></span></span>
       </button>)}
       {!a.observations.length&&<span className="gplaceholder"><LoaderCircle size={12} className="spin"/><Bi en="Looking at the image…" ja="画像を見ています…" inline/></span>}</div>
