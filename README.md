@@ -1,6 +1,18 @@
+<p align="center"><img src="docs/images/tsumugi-concept.jpg" alt="TSUMUGI — Weaving Context, Beyond Translation: a festival photograph is observed, connected to claims and sources, and understood as observed, context or unresolved" width="900"></p>
+
 # TSUMUGI — Weaving context, beyond translation
 
-A cultural field guide that separates what photographs show from what a caption claims. Upload up to four images, add or disable evidence to see explanations change, and follow every result through an evidence graph stored in Neo4j. Every item is shown in English and Japanese (switch between EN, 日本語 and Both).
+**English** · [日本語](README.ja.md)
+
+TSUMUGI (紡ぐ, "to weave") is a cultural field guide for people who love Japan. It separates **what a photograph shows** from **what its caption claims**, and tells you what is established, what is only context, and what is still unresolved.
+
+Upload up to four images and a caption. The app walks through three steps:
+
+1. **See**: models describe what is visibly there and outline the regions (VLM boxes refined into SAM3 masks).
+2. **Connect**: each claim in the caption is linked to the observations and checked against the sources you register.
+3. **Understand**: every claim is shown as confirmed, contradicted or unresolved, with its cited passage. Add or disable evidence to see the explanations change, and follow every result through an evidence graph in Neo4j. Cultural background notes sit beside the result, clearly marked as background, not evidence.
+
+Every item is shown in English and Japanese (switch between EN, 日本語 and Both).
 
 ## Start locally
 
@@ -50,6 +62,8 @@ The caption is synthetic. Image 1 is licensed CC BY 2.0 by Ippei Suzuki; image 2
 Further documents (Japanese): [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) (architecture), [docs/DEMO.md](docs/DEMO.md) (presenter script with timings, talking points and fallbacks), [docs/TSUMUGI_Design_v1.md](docs/TSUMUGI_Design_v1.md) (the original pre-implementation design, kept as history).
 
 ## Architecture and behavior
+
+<p align="center"><img src="docs/images/tsumugi-architecture.png" alt="TSUMUGI system architecture: a browser UI talks to a local FastAPI backend, which calls the ai& multi-model API, a local SAM3 sidecar, local storage (SQLite and files) and a Neo4j evidence graph" width="900"></p>
 
 The full architecture (in Japanese) is in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). In short:
 
