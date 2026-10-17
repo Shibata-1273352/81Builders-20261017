@@ -32,6 +32,17 @@ def test_multiple_images(client):
  assert (store.DATA/f'{aid}-3-model.jpg').exists()
  one=create(client);assert store.get(one)['input_hash']!=a['input_hash']
 
+def test_sideways_camera_photo_is_stored_upright(client):
+ # Orientation 8: pixels stored 30 wide × 20 high, shown turned left to 20 × 30, so the red left half ends at the bottom.
+ pic=Image.new('RGB',(30,20),'blue');pic.paste('red',(0,0,15,20))
+ exif=Image.Exif();exif[0x0112]=8;f=io.BytesIO();pic.save(f,'JPEG',exif=exif)
+ r=client.post('/api/analyses',files={'images':('x.jpg',f.getvalue(),'image/jpeg')},data={'text':'hello'});aid=r.json()['analysis_id']
+ x=client.get(f'/api/analyses/{aid}').json()['assets'][0]
+ assert (x['width'],x['height'])==(20,30)
+ stored=Image.open(io.BytesIO(client.get(f"/api/analyses/{aid}/assets/{x['id']}").content));model=Image.open(store.DATA/f'{aid}-1-model.jpg')
+ assert stored.size==model.size==(20,30) and stored.getexif().get(0x0112,1)==1
+ assert model.getpixel((10,27))[0]>200 and model.getpixel((10,3))[2]>200
+
 def test_image_limits(client):
  files=[('images',(f'x{i}.jpg',photo(),'image/jpeg')) for i in range(5)]
  assert client.post('/api/analyses',files=files,data={'text':'hello'}).status_code==422
