@@ -8,10 +8,11 @@ const tint=(c:string)=>({'--c':c}) as CSSProperties;
 
 // The analysed photograph with each observation in its own colour. SAM3 masks are drawn as an outline
 // and a light tint; when observations are spotlit the photo dims and only their pixels stay bright.
-export function ImageStage({src,maskUrl,obs,colors,spot,chosen,onSelect,onHover,children}:{src:string;maskUrl:(id:string)=>string;obs:Obs[];colors:Record<string,string>;spot:Set<string>;chosen?:string;
+export function ImageStage({src,maskUrl,obs,colors,spot,chosen,ratio,onSelect,onHover,children}:{src:string;ratio?:number;maskUrl:(id:string)=>string;obs:Obs[];colors:Record<string,string>;spot:Set<string>;chosen?:string;
  onSelect:(id:string)=>void;onHover:(id:string|null)=>void;children?:ReactNode}){
  const lit=obs.some(o=>spot.has(o.id)&&(o.mask||o.bbox));
- return <div className={'result-image'+(lit?' spotlit':'')} id="jump-image">
+ // With a known aspect the photo is capped at 70% of the viewport height, so the caption below stays in view.
+ return <div className={'result-image'+(lit?' spotlit':'')} id="jump-image" style={ratio?{width:`min(100%, calc(70vh * ${ratio.toFixed(4)}))`,marginInline:'auto'}:undefined}>
   <img src={src} alt=""/>
   {lit&&<span className="spot-dim" aria-hidden="true"/>}
   {obs.map(o=>{

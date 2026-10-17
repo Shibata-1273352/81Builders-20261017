@@ -137,11 +137,45 @@ html[data-present] .panel-open.view-graph .result-grid{grid-template-columns:min
 @keyframes fade-in{from{opacity:0}}
 .swatch{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:5px;vertical-align:-1px}
 .explanation.has-color{border-left:5px solid var(--c);padding-left:14px}
-.toast{position:fixed;left:50%;bottom:28px;transform:translateX(-50%);z-index:40;display:flex;align-items:center;gap:14px;max-width:min(760px,calc(100vw - 32px));border:0;background:var(--ink);color:var(--paper);padding:14px 22px;font-size:var(--t-m);text-align:left;box-shadow:0 12px 40px #0005;animation:toast-in .35s ease-out}
+.toast{position:fixed;right:28px;bottom:28px;z-index:40;display:flex;align-items:center;gap:14px;max-width:min(760px,calc(100vw - 32px));border:0;background:var(--ink);color:var(--paper);padding:14px 22px;font-size:var(--t-m);text-align:left;box-shadow:0 12px 40px #0005;animation:toast-in .35s ease-out}
 html .toast .bi:not(.inline)>span[lang=ja]{color:#d9dbd0}
 .toast-dot{width:12px;height:12px;border-radius:50%;background:#f76707;flex:none;box-shadow:0 0 0 4px #f7670744}
-@keyframes toast-in{from{opacity:0;transform:translate(-50%,16px)}}
+@keyframes toast-in{from{opacity:0;transform:translateY(16px)}}
 .cutout{position:relative;display:block;overflow:hidden;background:#e9e8df;border-left:6px solid var(--c,transparent)}
 .cutout.is-masked{background:repeating-conic-gradient(#e2e1d7 0 25%,#efeee6 0 50%) 0 0/16px 16px}
 .cutout-inner{position:absolute}
 .cutout img{display:block;width:100%;height:100%;object-fit:fill}
+
+/* Cultural background: model knowledge, kept visibly apart from the evidence sections. */
+.culture-note{margin:12px 0 4px 24px;padding:10px 14px;background:#ece7f6;color:#41306e;font-size:var(--t-s);border-left:3px solid #7048e8}
+.culture-list{display:grid;gap:16px;padding-left:24px;margin-top:16px}
+.culture-card{display:grid;grid-template-columns:minmax(120px,190px) 1fr;gap:20px;padding:16px;border:1px solid var(--line);background:#fbfaf6;cursor:pointer;transition:box-shadow .15s,border-color .15s;outline-offset:3px}
+.culture-card.has-color{border-left:5px solid var(--c)}
+.culture-card:hover,.culture-card:focus-visible{border-color:var(--c,var(--ink));box-shadow:0 4px 20px #272c2818}
+.culture-card.chosen{border:2px solid var(--c,var(--ink));border-left-width:5px;box-shadow:0 0 0 4px color-mix(in srgb,var(--c,#272c28) 20%,transparent)}
+.culture-card .cutout{align-self:start;width:100%;border-left:0}
+.culture-mark{display:grid;place-items:center;aspect-ratio:1;background:#ece7f6;font:400 64px/1 'Hiragino Mincho ProN','Yu Mincho','Noto Serif JP',serif;color:#5f3dc4}
+.culture-body{min-width:0}
+.culture-term{display:flex;align-items:baseline;flex-wrap:wrap;gap:4px 16px}
+.term-ja{font:500 36px/1.15 'Hiragino Mincho ProN','Yu Mincho','Noto Serif JP',serif;letter-spacing:.04em}
+.term-gloss{display:flex;flex-wrap:wrap;gap:4px 10px;align-items:baseline;font-size:var(--t-m);color:var(--muted)}
+.term-gloss i{font-family:var(--serif);font-size:1.3em}
+.culture-summary{font-size:var(--t-b);line-height:1.6;margin:10px 0 4px}
+.culture-points{margin:14px 0 0;padding:0;list-style:none;display:grid;gap:12px}
+.culture-points li{font-size:var(--t-m);line-height:1.55;padding-left:16px;position:relative}
+.culture-points li::before{content:'';position:absolute;left:0;top:.62em;width:7px;height:7px;border-radius:50%;background:var(--c,var(--muted))}
+.agree{display:inline-flex;align-items:center;gap:5px;margin-top:6px;padding:2px 9px;font-size:var(--t-s);border-radius:2px;line-height:1.5}
+.agree.ok{background:#dcebdd;color:#24533a}
+.agree.warn{background:#f6e5c1;color:#71500f}
+.agree.none{background:#e9e8df;color:var(--muted)}
+.corrections{margin:6px 0 0;padding:8px 12px;list-style:none;background:#f6efe0;font-size:var(--t-s);line-height:1.5}
+.corrections b{font-weight:600;margin-right:4px}
+.culture-caution{display:flex;gap:8px;align-items:flex-start;margin:14px 0 0;font-size:var(--t-s);color:var(--muted);line-height:1.55}
+.culture-caution svg{margin-top:.2em}
+.culture-models{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin:14px 0 0;font-size:var(--t-s);color:var(--muted)}
+.model-chip{display:inline-block;padding:1px 9px;background:var(--ink);color:var(--paper);font-size:var(--t-s);border-radius:2px;line-height:1.6}
+html[data-present] .term-ja{font-size:44px}
+@media(max-width:760px){.culture-card{grid-template-columns:1fr}
+.culture-list,.culture-note{padding-left:0;margin-left:0}}
+/* Wide screens: the image column stays in view while the Meaning column scrolls, so a spotlight is always visible. */
+@media(min-width:1151px){.original-column{position:sticky;top:12px;max-height:calc(100vh - 24px);overflow:auto;scrollbar-width:thin}}

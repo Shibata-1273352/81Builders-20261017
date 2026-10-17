@@ -187,7 +187,7 @@ export default function GraphView({analysis,graph,running,focus,impact,compact,b
       </button>
       <div className="gobs-list">{a.observations.map(o=><button key={o.id} className={'gmain gcard gobs'+dim(o.id)+(diff?.added.has(o.id)?' is-new':'')} style={{'--c':colors[o.id]} as CSSProperties} data-node={o.id} onClick={()=>onPick(o.node)} aria-label={both(`Observation ${obsLabel(o.id)}: ${o.text}`,`観察 ${obsLabel(o.id)}：${o.text_ja||o.text}`)}>
        <Crop src={assetUrl(a.id)} mask={o.masked?`/api/analyses/${analysis.id}/masks/${o.id}`:undefined} o={o} w={Number(a.node.width)||undefined} h={Number(a.node.height)||undefined}/>
-       <span className="gobs-body"><span className="glabel">{obsLabel(o.id)}{o.regionModel&&o.regionModel!==o.model&&<Chip tone="model">{o.regionModel}</Chip>}<Mark ids={[o.id]} diff={diff}/></span><span className="gclamp two"><Bi en={o.text} ja={o.text_ja}/></span></span>
+       <span className="gobs-body"><span className="glabel">{obsLabel(o.id)}{o.terms.map(t=><Chip key={t} tone="term" title="CulturalNote -ABOUT→ Observation"><span lang="ja">{t}</span></Chip>)}{o.regionModel&&o.regionModel!==o.model&&<Chip tone="model">{o.regionModel}</Chip>}<Mark ids={[o.id]} diff={diff}/></span><span className="gclamp two"><Bi en={o.text} ja={o.text_ja}/></span></span>
       </button>)}
       {!a.observations.length&&<span className="gplaceholder"><LoaderCircle size={12} className="spin"/><Bi en="Looking at the image…" ja="画像を見ています…" inline/></span>}</div>
      </div>})}</div>
@@ -247,7 +247,7 @@ export default function GraphView({analysis,graph,running,focus,impact,compact,b
 
   <details className="gv-stored">
    <summary><Database size={13}/><Bi en="Stored structure" ja="保存されている構造" inline/><span className="gchip-sub">{shown.node_count} nodes / {shown.relationship_count} relationships{state==='draft'||state==='unsaved'?' · draft, not yet written':''}</span></summary>
-   <p className="gv-note"><Bi en="Region, Scope and ToolRun nodes, and explanations of observations, are stored in Neo4j but folded into the cards above." ja="Region・Scope・ToolRun のノードと、観察の説明は Neo4j に保存されていますが、上のカードにまとめて表示しています。"/></p>
+   <p className="gv-note"><Bi en="Region, Scope and ToolRun nodes, and explanations of observations, are stored in Neo4j but folded into the cards above. Each CulturalNote appears as its Japanese term on the observation it is ABOUT, and is REVIEWED_BY the models that checked it." ja="Region・Scope・ToolRun のノードと、観察の説明は Neo4j に保存されていますが、上のカードにまとめて表示しています。CulturalNote は、ABOUT でつながる観察のカードに日本語の用語として表示し、確認したモデルとは REVIEWED_BY でつながっています。"/></p>
    <div className="gv-tables">
     <table><caption><Bi en="Nodes by label" ja="ラベル別ノード" inline/></caption><tbody>{view.counts.labels.map(([k,v])=><tr key={k}><th>{k}</th><td>{v}</td></tr>)}</tbody></table>
     <table><caption><Bi en="Relationships by type" ja="種類別の関係" inline/></caption><tbody>{view.counts.rels.map(([k,v])=><tr key={k}><th>{k}</th><td>{v}</td></tr>)}</tbody></table>

@@ -38,7 +38,7 @@ function scopeChips(s?:GNode){
  const a=str(s.time_start),b=str(s.time_end);
  return [str(s.place),a&&b&&a!==b?`${a}–${b}`:a||b].filter(Boolean) as string[];
 }
-export type ObsView={id:string;assetId:string;assetIndex:number;text:string;text_ja?:string;crop:number[]|null;masked:boolean;model?:string;regionModel?:string;node:GNode};
+export type ObsView={id:string;assetId:string;assetIndex:number;text:string;text_ja?:string;crop:number[]|null;masked:boolean;model?:string;regionModel?:string;terms:string[];node:GNode};
 export type PassageView={id:string;quote:string;quote_ja?:string;stance:string;scopeMatch:boolean;sourceId:string;node:GNode};
 export type Column={id:string;claim:GNode;text:string;text_ja?:string;kind:string;scope:string[];model?:string;
  assessment?:GNode;status?:Status;reason?:string;reason_ja?:string;assessModel?:string;
@@ -63,7 +63,8 @@ export function buildView(g:Graph):View{
  for(const o of of('Observation')){
   const region=byId.get(to(o.id,'GROUNDS')[0]?.source||'');
   const asset=assetOf.get(String(o.asset_id||region?.asset_id||''))||assetOf.get(to(region?.id||'','HAS_REGION')[0]?.source||'');
-  const view:ObsView={id:o.id,assetId:asset?.id||'',assetIndex:asset?.index||0,text:String(o.text||o.name||''),text_ja:str(o.text_ja),crop:cropBox(region?.bbox_normalized??o.bbox,region?.mask??o.mask),masked:Boolean(region?.segmenter||region?.mask||o.mask),model:model(o.id),regionModel:region?model(region.id):undefined,node:o};
+  const view:ObsView={id:o.id,assetId:asset?.id||'',assetIndex:asset?.index||0,text:String(o.text||o.name||''),text_ja:str(o.text_ja),crop:cropBox(region?.bbox_normalized??o.bbox,region?.mask??o.mask),masked:Boolean(region?.segmenter||region?.mask||o.mask),model:model(o.id),regionModel:region?model(region.id):undefined,
+   terms:to(o.id,'ABOUT').map(e=>str(byId.get(e.source)?.term_ja)).filter(Boolean) as string[],node:o};
   asset?.observations.push(view);
  }
  const columns:Column[]=of('Claim').map(c=>{
@@ -100,6 +101,7 @@ export type DraftInput={id:string;revision:number;assets:{id:string;index:number
  assessments:{id:string;claim_id:string;status:string;reason:string;reason_ja?:string|null;reason_code?:string;run_id?:string|null;passages:{id:string;source_id:string;quote:string;quote_ja?:string|null;stance:string;scope_match:boolean}[]}[];
  explanations:{id:string;section:string;text:string;text_ja?:string|null;support_ids:Ref[];origin?:string;run_id?:string|null;check?:{model_id:string;verdict:string}|null}[];
  sources:{id:string;title:string;publisher?:string;place?:string;active:boolean;url_optional?:string}[];
+ cultural_notes?:{id:string;about:string|null;term:{ja:string;reading?:string|null;en:string};summary:{en:string;ja?:string|null};consensus:string;run_id?:string|null;reviews:{model:string;run_id?:string|null;verdict:string|null}[]}[]|null;
  runs:{id:string;tool:string;model_id:string;latency_ms?:number;started_at?:string}[]};
 export function draftGraph(a:DraftInput):Graph{
  const nodes:GNode[]=[],edges:GEdge[]=[],runs=new Map(a.runs.map(r=>[r.id,r])),used=new Set<string>();
@@ -131,6 +133,12 @@ export function draftGraph(a:DraftInput):Graph{
   node('Explanation',e.id,{text:e.text,text_ja:e.text_ja,section:e.section,origin:e.origin,check_model:e.check?.model_id,check_verdict:e.check?.verdict});
   for(const r of e.support_ids)edge('BASED_ON',e.id,r.id);
   generated(e.id,e.run_id);
+ }
+ for(const n of a.cultural_notes||[]){
+  node('CulturalNote',n.id,{term_ja:n.term.ja,term_en:n.term.en,reading:n.term.reading,summary:n.summary.en,summary_ja:n.summary.ja,consensus:n.consensus});
+  if(n.about&&a.observations.some(o=>o.id===n.about))edge('ABOUT',n.id,n.about);
+  generated(n.id,n.run_id);
+  for(const rv of n.reviews)if(rv.run_id&&runs.has(rv.run_id)){used.add(rv.run_id);edge('REVIEWED_BY',n.id,rv.run_id,{verdict:rv.verdict,model_id:rv.model})}
  }
  for(const id of used){const r=runs.get(id)!;node('ToolRun',id,{tool:r.tool,model_id:r.model_id,latency_ms:r.latency_ms,started_at:r.started_at})}
  return {nodes,edges,stored:'draft',revision:a.revision,node_count:nodes.length,relationship_count:edges.length};

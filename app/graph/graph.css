@@ -157,3 +157,4 @@ button.gcard:hover,.gcard:has(>.gmain:hover){border-color:#bdbfb2}
 .gcrop.cut{background:repeating-conic-gradient(#e2e1d7 0 25%,#efeee6 0 50%) 0 0/12px 12px}
 .gcrop.cut .gcrop-mask{background-color:transparent;background-repeat:no-repeat;opacity:1}
 .gobs .glabel{color:var(--c,var(--muted));font-weight:600}
+.gchip.term{font-size:var(--t-m);font-variant:normal;letter-spacing:.04em;color:#41306e;background:#ece7f6;border-color:#d5ccec;font-family:'Hiragino Mincho ProN','Yu Mincho','Noto Serif JP',serif}

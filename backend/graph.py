@@ -2,8 +2,8 @@ import os, json, asyncio, threading, time
 from neo4j import GraphDatabase
 from .store import db
 
-LABELS=['Asset','Region','Observation','Claim','Scope','Source','Passage','Assessment','Explanation','ToolRun']
-RELS=['HAS_REGION','GROUNDS','LINKED_TO','HAS_SCOPE','EVALUATES','CITES','HAS_PASSAGE','BASED_ON','GENERATED_BY']
+LABELS=['Asset','Region','Observation','Claim','Scope','Source','Passage','Assessment','Explanation','CulturalNote','ToolRun']
+RELS=['HAS_REGION','GROUNDS','LINKED_TO','HAS_SCOPE','EVALUATES','CITES','HAS_PASSAGE','BASED_ON','ABOUT','GENERATED_BY','REVIEWED_BY']
 # Labels and relationship types cannot be parameters, so each is a FOREACH branch built from the whitelist:
 # all nodes of a revision are written in one statement and all relationships in another.
 NODES='UNWIND $rows AS row MERGE (n:Tsumugi {key:row.key}) SET n += row.props '+' '.join(f"FOREACH (_ IN CASE WHEN row.label='{l}' THEN [1] ELSE [] END | SET n:{l})" for l in LABELS)
@@ -66,6 +66,14 @@ def payload(a):
   node('Explanation',e['id'],name=e['text'][:48],text=e['text'],text_ja=e.get('text_ja'),section=e['section'],origin=e.get('origin'),check_model=(e.get('check') or {}).get('model_id'),check_verdict=(e.get('check') or {}).get('verdict'))
   for ref in e['support_ids']:edge('BASED_ON',e['id'],ref['id'])
   generated(e['id'],e.get('run_id'))
+ # Cultural notes are model background: linked to what they describe and to the runs that wrote and reviewed them, never to an assessment.
+ observed={o['id'] for o in a['observations']}
+ for n in a.get('cultural_notes') or []:
+  node('CulturalNote',n['id'],name=n['term']['ja'],term_ja=n['term']['ja'],term_en=n['term']['en'],reading=n['term'].get('reading'),summary=n['summary']['en'],summary_ja=n['summary'].get('ja'),consensus=n['consensus'])
+  if n.get('about') in observed:edge('ABOUT',n['id'],n['about'])
+  generated(n['id'],n.get('run_id'))
+  for rv in n.get('reviews',[]):
+   if rv.get('run_id') in runs:used.add(rv['run_id']);edge('REVIEWED_BY',n['id'],rv['run_id'],verdict=rv['verdict'],model_id=rv['model'])
  for rid in used:node('ToolRun',rid,name=runs[rid]['tool'],tool=runs[rid]['tool'],model_id=runs[rid]['model_id'],latency_ms=runs[rid].get('latency_ms'),started_at=runs[rid].get('started_at'))
  return {'version':2,'nodes':nodes,'edges':edges}
 

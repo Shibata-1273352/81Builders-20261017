@@ -8,7 +8,7 @@ from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Header, Requ
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 from PIL import Image, UnidentifiedImageError
-from . import store, graph, llm, segment
+from . import store, graph, llm, segment, culture
 from .pipeline import process
 
 lock=asyncio.Lock();tasks=set()
@@ -49,7 +49,7 @@ def launch(a):
 def busy():
  if any(not t.done() for t in tasks):raise HTTPException(503,'One analysis is already running. Please wait.')
 @app.get('/api/health')
-def health():return {'status':'ready','model':os.getenv('AIAND_MODEL'),'vision_model':os.getenv('AIAND_VISION_MODEL'),'check_model':llm.check_model(),'configured':bool(os.getenv('AIAND_API_KEY')),'segmentation':segment.MODEL if segment.enabled() else None}
+def health():return {'status':'ready','model':os.getenv('AIAND_MODEL'),'vision_model':os.getenv('AIAND_VISION_MODEL'),'check_model':llm.check_model(),'culture_model':culture.writer(),'review_models':culture.reviewers(),'configured':bool(os.getenv('AIAND_API_KEY')),'segmentation':segment.MODEL if segment.enabled() else None}
 def check_image(raw):
  if len(raw)>10*1024*1024:raise HTTPException(413,'Each image must be 10 MB or less.')
  try:
