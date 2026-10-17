@@ -1,4 +1,4 @@
-import asyncio, base64
+import asyncio, base64, hashlib, weakref
 from . import store, graph
 from .llm import call, check_model
 
@@ -95,86 +95,117 @@ def fallback(claim,assessment):
 
 def model_claims(claims):return [{k:c.get(k) for k in ['id','text','kind','place','time_start','time_end']} for c in claims]
 
+CHECK_FAILED=('The independent check was unavailable for some explanations; fixed wording is shown instead.','一部の説明は独立検証を実行できなかったため、定型文を表示しています。')
+_slots=weakref.WeakKeyDictionary()
+def slots():
+ # At most 8 concurrent ai& calls per event loop (tests run many loops, so one semaphore each).
+ loop=asyncio.get_running_loop()
+ if loop not in _slots:_slots[loop]=asyncio.Semaphore(8)
+ return _slots[loop]
+def digest(text):return hashlib.sha256(text.encode()).hexdigest()
+
 async def process(a):
- runs=a['runs']; initial=not a['claims']
+ runs=a['runs']; initial=not a['claims']; check=check_model(); previous=a.get('previous') or {}
  a['limitations']=[l for l in a['limitations'] if isinstance(l,dict) and l.get('scope')=='image']
+ # Disabling a source re-evaluates only the claims its impact traversal reached; the rest keep their verified result.
+ reuse={c['id'] for c in a['claims']}-set(a.get('stale_claim_ids') or []) if a.get('reuse_unaffected') else set()
  async def invoke(*args,**kwargs):
-  store.event(a,'tool.started',{'tool':kwargs.get('tool','Model')})
-  try:
-   result=await call(*args,**kwargs)
-   store.event(a,'tool.completed',{'tool':kwargs.get('tool','Model')})
-   return result
-  except Exception:
-   store.event(a,'tool.failed',{'tool':kwargs.get('tool','Model')})
-   raise
+  async with slots():
+   store.event(a,'tool.started',{'tool':kwargs.get('tool','Model')})
+   try:
+    result=await call(*args,**kwargs)
+    store.event(a,'tool.completed',{'tool':kwargs.get('tool','Model')})
+    return result
+   except Exception:
+    store.event(a,'tool.failed',{'tool':kwargs.get('tool','Model')})
+    raise
+ async def observe(asset):
+  try:raw=await invoke(OBS_PROMPT,{'image_number':asset['index']},image=model_image(a,asset),runs=runs,tool=f"Image observation · {asset['index']}")
+  except Exception:limit(a,IMAGE_FAILED,'image',n=asset['index']);return
+  a['observations']=sorted(a['observations']+validate_observations(raw,asset),key=lambda o:[int(n) for n in o['id'].split('-')[1:]])
+  store.save(a);store.event(a,'observations.ready',{'asset_id':asset['id']})
+ async def link():
+  try:validate_links(await invoke(LINK_PROMPT,{'claims':model_claims(a['claims']),'observations':[{'id':o['id'],'image':int(o['id'].split('-')[1]),'text':o['text']} for o in a['observations']]},runs=runs,tool='Claim–observation linking'),a['claims'],a['observations'])
+  except Exception:limit(a,LINK_FAILED,'image')
+  store.save(a);store.event(a,'claims.linked')
+ async def verify():
+  sources=[s for s in a['sources'] if s['active']];todo=[c for c in a['claims'] if c['id'] not in reuse]
+  store.event(a,'evidence.retrieved',{'source_count':len(sources),'reused_claim_ids':sorted(reuse)})
+  items=[]
+  if sources and todo:
+   registered=[dict(id='registered-'+s['id'],source_id=s['id'],quote=s['text']) for s in sources]
+   raw=await invoke(VERIFY_PROMPT,{'claims':model_claims(todo),'sources':sources,'passages':registered},runs=runs,tool='Evidence verification')
+   items=raw.get('assessments',[])
+   for item in items:
+    item['_run_id']=raw.get('_run_id')
+    for citation in item.get('citations',[]):
+     passage=next((p for p in registered if p['id']==citation.get('passage_id')),None)
+     citation['source_id']=passage['source_id'] if passage else 'invalid'
+     citation['quote']=passage['quote'] if passage else ''
+  kept={x['claim_id']:x for x in previous.get('assessments',[]) if x['claim_id'] in reuse}
+  a['assessments']=[kept.get(c['id']) or assess(c,next((i for i in items if i.get('claim_id')==c['id']),{}),sources) for c in a['claims']]
+  return sources
  if initial:
-  async def observe():
-   observed=[]
-   for asset in a['assets']:
-    try:observed.append((asset,await invoke(OBS_PROMPT,{'image_number':asset['index']},image=model_image(a,asset),runs=runs,tool=f"Image observation · {asset['index']}")))
-    except Exception as e:observed.append((asset,e))
-   return observed
-  observed,extracted=await asyncio.gather(observe(),invoke(CLAIM_PROMPT,{'text':a['text'],'image_count':len(a['assets'])},runs=runs,tool='Claim extraction'),return_exceptions=True)
-  if isinstance(extracted,Exception):raise extracted
-  a['claims']=validate_claims(extracted,a['text']);store.save(a);store.event(a,'claims.ready')
-  for asset,raw in observed:
-   if isinstance(raw,Exception):limit(a,IMAGE_FAILED,'image',n=asset['index']);continue
-   a['observations'].extend(validate_observations(raw,asset))
-   store.save(a);store.event(a,'observations.ready',{'asset_id':asset['id']})
-  if a['observations'] and not any(o['bbox'] for o in a['observations']):limit(a,NO_REGION,'image')
-  if a['observations']:
-   try:validate_links(await invoke(LINK_PROMPT,{'claims':model_claims(a['claims']),'observations':[{'id':o['id'],'image':int(o['id'].split('-')[1]),'text':o['text']} for o in a['observations']]},runs=runs,tool='Claim–observation linking'),a['claims'],a['observations'])
-   except Exception:limit(a,LINK_FAILED,'image')
-   store.save(a);store.event(a,'claims.linked')
- sources=[s for s in a['sources'] if s['active']]
- store.event(a,'evidence.retrieved',{'source_count':len(sources)})
- if sources:
-  registered=[dict(id='registered-'+s['id'],source_id=s['id'],quote=s['text']) for s in sources]
-  raw=await invoke(VERIFY_PROMPT,{'claims':model_claims(a['claims']),'sources':sources,'passages':registered},runs=runs,tool='Evidence verification')
-  items=raw.get('assessments',[])
-  for item in items:
-   item['_run_id']=raw.get('_run_id')
-   for citation in item.get('citations',[]):
-    passage=next((p for p in registered if p['id']==citation.get('passage_id')),None)
-    citation['source_id']=passage['source_id'] if passage else 'invalid'
-    citation['quote']=passage['quote'] if passage else ''
- else:items=[]
- a['assessments']=[assess(c,next((i for i in items if i.get('claim_id')==c['id']),{}),sources) for c in a['claims']]
+  observing=asyncio.ensure_future(asyncio.gather(*[observe(x) for x in a['assets']]))
+  try:a['claims']=validate_claims(await invoke(CLAIM_PROMPT,{'text':a['text'],'image_count':len(a['assets'])},runs=runs,tool='Claim extraction'),a['text'])
+  except BaseException:observing.cancel();raise
+  store.save(a);store.event(a,'claims.ready')
+  # Verification needs only claims, so it runs while images are still being observed and linked.
+  verifying=asyncio.ensure_future(verify())
+  try:
+   await observing
+   if a['observations'] and not any(o['bbox'] for o in a['observations']):limit(a,NO_REGION,'image')
+   if a['observations']:await link()
+   sources=await verifying
+  except BaseException:verifying.cancel();raise
+ else:sources=await verify()
  # Persist graph before releasing assessed/explanation events.
  a['explanations']=[dict(id='explanation-'+o['id'],section='see',text=o['text'],text_ja=o.get('text_ja'),claim_ids=[],support_ids=[{'type':'Observation','id':o['id'],'revision':a['revision']}],origin='observation',check=None,run_id=None) for o in a['observations']]
- # Only permit model prose for assessed claims; an independent model must accept it.
- generated={};verdicts={};check=check_model()
- if sources:
-  result=await invoke(EXPLAIN_PROMPT,{'claims':[{**model_claims([c])[0],'text_ja':c.get('text_ja')} for c in a['claims']],'assessments':a['assessments']},runs=runs,tool='Explanation writing')
-  generated={e.get('claim_id'):dict(text=e['text'],text_ja=ja(e.get('text_ja')),run_id=result.get('_run_id')) for e in result.get('explanations',[]) if isinstance(e,dict) and isinstance(e.get('text'),str)}
-  if generated:
-   checked=await invoke(CHECK_PROMPT,{'claims':model_claims(a['claims']),'assessments':a['assessments'],'explanations':{k:{'text':v['text'],'text_ja':v['text_ja']} for k,v in generated.items()}},runs=runs,tool='Independent check · '+check.split('/')[0],model=check,effort='low')
-   for item in checked.get('results',[]):
-    if isinstance(item,dict) and item.get('claim_id') in generated:verdicts[item['claim_id']]=item.get('grounded') is True and (item.get('faithful_ja') is True or not generated[item['claim_id']]['text_ja'])
- for c,assessment in zip(a['claims'],a['assessments']):
-  status=assessment['status'];text,text_ja=fallback(c,assessment);origin='template';run_id=None
-  if c['id'] in generated and verdicts.get(c['id']):text,text_ja,run_id,origin=generated[c['id']]['text'],generated[c['id']]['text_ja'],generated[c['id']]['run_id'],'model'
-  a['explanations'].append(dict(id='explanation-'+c['id'],section='unknown' if status=='unresolved' else 'context',text=text,text_ja=text_ja,claim_ids=[c['id']],support_ids=[{'type':'Assessment','id':assessment['id'],'revision':a['revision']}],origin=origin,check=dict(model_id=check,verdict='accepted' if verdicts.get(c['id']) else 'rejected') if c['id'] in generated else None,run_id=run_id))
- passages=[p for x in a['assessments'] for p in x['passages']]
- if passages:
-  # The original quote stays authoritative; quote_ja is a labelled reference translation.
+ kept={e['claim_ids'][0]:e for e in previous.get('explanations',[]) if e['claim_ids'] and e['claim_ids'][0] in reuse}
+ async def explain(c,x):
+  # One pipeline per claim: a model writes, an independent model checks; anything short of acceptance keeps fixed wording.
+  if c['id'] in kept:return dict(kept[c['id']],support_ids=[{'type':'Assessment','id':x['id'],'revision':a['revision']}])
+  text,text_ja=fallback(c,x);n=c['id'].split('-')[-1]
+  entry=dict(id='explanation-'+c['id'],section='unknown' if x['status']=='unresolved' else 'context',text=text,text_ja=text_ja,claim_ids=[c['id']],support_ids=[{'type':'Assessment','id':x['id'],'revision':a['revision']}],origin='template',check=None,run_id=None)
+  if not sources:return entry
   try:
-   result=await invoke(QUOTE_PROMPT,{'quotes':[{'passage_id':p['id'],'quote':p['quote']} for p in passages]},runs=runs,tool='Quote translation')
-   for t in result.get('translations',[]):
-    for p in passages:
-     if isinstance(t,dict) and p['id']==t.get('passage_id'):p['quote_ja']=ja(t.get('quote_ja'))
-  except Exception:pass
+   result=await invoke(EXPLAIN_PROMPT,{'claims':[{**model_claims([c])[0],'text_ja':c.get('text_ja')}],'assessments':[x]},runs=runs,tool=f'Explanation writing · C{n}')
+   draft=next((dict(text=e['text'],text_ja=ja(e.get('text_ja'))) for e in result.get('explanations',[]) if isinstance(e,dict) and e.get('claim_id')==c['id'] and isinstance(e.get('text'),str)),None)
+  except Exception:return entry
+  if not draft:return entry
+  try:
+   checked=await invoke(CHECK_PROMPT,{'claims':model_claims([c]),'assessments':[x],'explanations':{c['id']:draft}},runs=runs,tool=f"Independent check · {check.split('/')[0]} · C{n}",model=check,effort='low',timeout=8)
+  except Exception:
+   limit(a,CHECK_FAILED);entry['check']=dict(model_id=check,verdict='unavailable');return entry
+  item=next((i for i in checked.get('results',[]) if isinstance(i,dict) and i.get('claim_id')==c['id']),{})
+  ok=item.get('grounded') is True and (item.get('faithful_ja') is True or not draft['text_ja'])
+  entry['check']=dict(model_id=check,verdict='accepted' if ok else 'rejected')
+  if ok:entry.update(draft,origin='model',run_id=result.get('_run_id'))
+  return entry
+ passages=[p for x in a['assessments'] for p in x['passages']]
+ async def translate():
+  # The original quote stays authoritative; quote_ja is a labelled reference translation, cached per quote text.
+  cache=a.setdefault('quote_cache',{});todo={digest(p['quote']):p for p in passages if digest(p['quote']) not in cache}
+  if todo:
+   try:
+    result=await invoke(QUOTE_PROMPT,{'quotes':[{'passage_id':k,'quote':p['quote']} for k,p in todo.items()]},runs=runs,tool='Quote translation')
+    for t in result.get('translations',[]):
+     if isinstance(t,dict) and t.get('passage_id') in todo and ja(t.get('quote_ja')):cache[t['passage_id']]=ja(t['quote_ja'])
+   except Exception:pass
+  for p in passages:p['quote_ja']=p.get('quote_ja') or cache.get(digest(p['quote']))
+ *written,_=await asyncio.gather(*[explain(c,x) for c,x in zip(a['claims'],a['assessments'])],translate())
+ a['explanations'].extend(written)
  if any(not x.get(k) for x,k in [(o,'text_ja') for o in a['observations']]+[(c,'text_ja') for c in a['claims']]+[(e,'text_ja') for e in a['explanations']]+[(x,'reason_ja') for x in a['assessments']]+[(p,'quote_ja') for p in passages]):limit(a,JA_MISSING)
  await graph.persist(a)
  for item in a['assessments']:store.event(a,'claim.assessed',{'claim_id':item['claim_id'],'status':item['status']})
  a['status']='partial' if a['limitations'] else 'completed'
- a['display_revision']=a['revision'];a['updated_at']=store.now();a['error']=None;a['stale_claim_ids']=[]
+ a['display_revision']=a['revision'];a['updated_at']=store.now();a['error']=None;a['stale_claim_ids']=[];a['reuse_unaffected']=False
  old=a.get('previous')
  a['changes']=[]
  if old:
   for assessment in a['assessments']:
-   previous=next((x for x in old['assessments'] if x['claim_id']==assessment['claim_id']),None)
+   prior=next((x for x in old['assessments'] if x['claim_id']==assessment['claim_id']),None)
    after=next(e for e in a['explanations'] if assessment['claim_id'] in e['claim_ids'])
    before=next((e for e in old['explanations'] if assessment['claim_id'] in e['claim_ids']),{})
-   a['changes'].append(dict(claim_id=assessment['claim_id'],before=before.get('text',''),before_ja=before.get('text_ja'),after=after['text'],after_ja=after.get('text_ja'),from_status=previous['status'] if previous else 'unresolved',to_status=assessment['status'],changed=before.get('text','')!=after['text'] or bool(previous and previous['status']!=assessment['status'])))
+   a['changes'].append(dict(claim_id=assessment['claim_id'],before=before.get('text',''),before_ja=before.get('text_ja'),after=after['text'],after_ja=after.get('text_ja'),from_status=prior['status'] if prior else 'unresolved',to_status=assessment['status'],changed=before.get('text','')!=after['text'] or bool(prior and prior['status']!=assessment['status'])))
  store.snapshot(a);store.save(a);store.event(a,'explanation.updated');store.event(a,'analysis.completed',{'status':a['status']})

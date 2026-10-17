@@ -1,4 +1,4 @@
-import asyncio
+import asyncio, copy
 import pytest
 from backend import pipeline,store,graph
 from backend.pipeline import assess, validate_claims
@@ -43,8 +43,9 @@ def run(tmp_path,monkeypatch):
  monkeypatch.setattr(graph,'persist',persist)
  calls=[]
  def start(replies,sources=()):
-  async def call(system,data,image=None,runs=None,tool='',model=None,effort='none'):
-   calls.append(dict(tool=tool,model=model,effort=effort,data=data))
+  async def call(system,data,image=None,runs=None,tool='',model=None,effort='none',**kw):
+   call=dict(tool=tool,model=model,effort=effort,data=data,start=asyncio.get_running_loop().time());calls.append(call)
+   await asyncio.sleep(.03);call['end']=asyncio.get_running_loop().time()
    reply=replies(tool,data)
    if isinstance(reply,Exception):raise reply
    return dict(reply,_run_id=tool)
@@ -52,6 +53,7 @@ def run(tmp_path,monkeypatch):
   a=dict(id='a',revision=1,text='Festival in July. Both photographs were taken in 2026.',assets=[dict(id='a-1.jpg',index=1,mime_type='image/jpeg'),dict(id='a-2.jpg',index=2,mime_type='image/jpeg')],runs=[],claims=[],observations=[],sources=list(sources),limitations=[],previous=None)
   asyncio.run(pipeline.process(a));return a
  start.calls=calls
+ start.again=lambda a:asyncio.run(pipeline.process(a))
  return start
 
 def base(tool,data):
@@ -60,9 +62,9 @@ def base(tool,data):
  if tool=='Claim extraction':return {'claims':[{'text':'Festival in July.','text_ja':'祭りは7月。','span':'Festival in July.'},{'text':'Photograph 2 was taken in 2026.','text_ja':'写真2は2026年に撮影された。','span':'Both photographs were taken in 2026.','kind':'photo_identity'}]}
  if tool=='Claim–observation linking':return {'links':[{'claim_id':'claim-2','observation_ids':['observation-2-1','observation-9-9','claim-1']}]}
  if tool=='Evidence verification':return {'assessments':[{'claim_id':'claim-1','reason':'The source says July.','reason_ja':'出典は7月と述べている。','citations':[{'passage_id':'registered-s','stance':'supports','scope_match':True}]}]}
- if tool=='Explanation writing':return {'explanations':[{'claim_id':'claim-1','text':'The source dates the festival to July.','text_ja':'出典は祭りを7月としている。'}]}
+ if tool.startswith('Explanation writing'):return {'explanations':[{'claim_id':'claim-1','text':'The source dates the festival to July.','text_ja':'出典は祭りを7月としている。'}]}
  if tool.startswith('Independent check'):return {'results':[{'claim_id':'claim-1','grounded':True,'faithful_ja':True}]}
- if tool=='Quote translation':return {'translations':[{'passage_id':'passage-claim-1-1','quote_ja':'祇園祭は7月を通して行われる。'}]}
+ if tool=='Quote translation':return {'translations':[{'passage_id':q['passage_id'],'quote_ja':'祇園祭は7月を通して行われる。'} for q in data['quotes']]}
  raise AssertionError(tool)
 
 def test_bbox_converted_per_image(run):
@@ -81,7 +83,7 @@ def test_independent_check_uses_check_model(run,monkeypatch):
  monkeypatch.setenv('AIAND_CHECK_MODEL','qwen/qwen-test')
  a=run(base,[SOURCE])
  check=[c for c in run.calls if c['tool'].startswith('Independent check')][0]
- assert check['model']=='qwen/qwen-test';assert check['effort']=='low';assert check['tool']=='Independent check · qwen'
+ assert check['model']=='qwen/qwen-test';assert check['effort']=='low';assert check['tool']=='Independent check · qwen · C1'
  assert all(c['model'] is None for c in run.calls if not c['tool'].startswith('Independent check'))
  e=a['explanations'][-2];assert e['origin']=='model';assert e['check']=={'model_id':'qwen/qwen-test','verdict':'accepted'}
  assert a['assessments'][0]['status']=='confirmed';assert a['assessments'][0]['passages'][0]['quote_ja']=='祇園祭は7月を通して行われる。'
@@ -112,3 +114,36 @@ def test_image_failure_is_partial(run):
  def replies(tool,data):return RuntimeError('vision down') if tool=='Image observation · 2' else base(tool,data)
  a=run(replies)
  assert {o['asset_id'] for o in a['observations']}=={'a-1.jpg'};assert a['limitations'][0]['text'].startswith('Image observation failed for image 2')
+
+def test_calls_run_concurrently(run):
+ run(base,[SOURCE]);at={c['tool']:c for c in run.calls}
+ first=[at['Image observation · 1'],at['Image observation · 2'],at['Claim extraction']]
+ # All images and claim extraction start together; verification starts before the images finish.
+ assert max(c['start'] for c in first)<min(c['end'] for c in first)
+ assert at['Evidence verification']['start']<at['Image observation · 2']['end']+.001
+ assert at['Quote translation']['start']<at['Independent check · qwen · C1']['start']
+
+def revise(a,**changes):
+ a['previous']={k:copy.deepcopy(a[k]) for k in ['observations','claims','assessments','explanations']}
+ a['revision']+=1;a.update(changes)
+
+def test_disable_reuses_unaffected_claims_and_quote_cache(run):
+ other=dict(SOURCE,id='t',text='Unrelated text.')
+ a=run(base,[dict(SOURCE),other]);run.calls.clear()
+ kept=copy.deepcopy(a['assessments'][1])
+ revise(a,stale_claim_ids=['claim-1'],reuse_unaffected=True);a['sources'][0]['active']=False
+ run.again(a)
+ verify=[c for c in run.calls if c['tool']=='Evidence verification'][0]
+ assert [c['id'] for c in verify['data']['claims']]==['claim-1']
+ assert a['assessments'][1]==kept and a['explanations'][-1]['support_ids'][0]['revision']==2
+ assert a['assessments'][0]['status']=='unresolved' and a['stale_claim_ids']==[] and not a['reuse_unaffected']
+ run.calls.clear();revise(a);a['sources'][0]['active']=True
+ run.again(a)
+ assert a['assessments'][0]['passages'][0]['quote_ja']=='祇園祭は7月を通して行われる。'
+ assert not any(c['tool']=='Quote translation' for c in run.calls)
+
+def test_check_outage_keeps_template(run):
+ def replies(tool,data):return RuntimeError('timeout') if tool.startswith('Independent check') else base(tool,data)
+ a=run(replies,[SOURCE]);e=a['explanations'][-2]
+ assert e['origin']=='template' and e['check']['verdict']=='unavailable' and a['assessments'][0]['status']=='confirmed'
+ assert any(l['text'].startswith('The independent check was unavailable') for l in a['limitations'])

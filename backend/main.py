@@ -126,7 +126,8 @@ async def events(aid:str,request:Request,last_event_id:Optional[str]=Header(None
    a=find(aid)
    if a['status']!='running':return
    yield ': heartbeat\n\n';await asyncio.sleep(.4)
- return StreamingResponse(stream(),media_type='text/event-stream',headers={'Cache-Control':'no-cache','X-Accel-Buffering':'no'})
+ # no-transform stops the Next.js proxy from gzip-buffering the stream until the job ends.
+ return StreamingResponse(stream(),media_type='text/event-stream',headers={'Cache-Control':'no-cache, no-transform','X-Accel-Buffering':'no'})
 class SourceInput(BaseModel):
  title:str=Field(min_length=1,max_length=200)
  text:str=Field(min_length=1,max_length=12000)
@@ -151,7 +152,7 @@ def prepare(a,expected):
  if expected!=a['revision']:raise HTTPException(409,'Revision changed. Reload before editing.')
  previous={k:copy.deepcopy(a[k]) for k in ['observations','claims','assessments','explanations']}
  if a['status']=='failed' and a.get('previous'):previous=a['previous']
- a['started_at']=store.now();a['previous']=previous;a['revision']+=1;a['status']='running';a['error']=None;a['changes']=[]
+ a['started_at']=store.now();a['previous']=previous;a['revision']+=1;a['status']='running';a['error']=None;a['changes']=[];a['reuse_unaffected']=False;a['stale_claim_ids']=[]
  return a
 @app.post('/api/analyses/{aid}/sources',status_code=202)
 async def add_source(aid:str,body:SourceInput,idempotency_key:str=Header(...)):
@@ -178,7 +179,7 @@ async def patch_source(aid:str,sid:str,body:SourcePatch):
  if body.expected_revision!=a['revision']:raise HTTPException(409,'Revision changed. Reload before editing.')
  # Disabling only re-evaluates what cites the source; enabling may affect any claim.
  stale=(await compute_impact(a,sid))['claim_ids'] if not body.active else [c['id'] for c in a['claims']]
- prepare(a,body.expected_revision);source['active']=body.active;a['stale_claim_ids']=stale;launch(a);return response(a)
+ prepare(a,body.expected_revision);source['active']=body.active;a['stale_claim_ids']=stale;a['reuse_unaffected']=not body.active;launch(a);return response(a)
 @app.post('/api/analyses/{aid}/retry',status_code=202)
 async def retry(aid:str,body:RetryInput):
  a=find(aid);prepare(a,body.expected_revision);launch(a);return response(a)

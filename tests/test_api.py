@@ -57,7 +57,9 @@ def test_revision_and_idempotency(client):
 
 def test_T10_sse_replay(client):
  aid=create(client)
- data=client.get(f'/api/analyses/{aid}/events').text
+ r=client.get(f'/api/analyses/{aid}/events');data=r.text
+ # Without no-transform the Next.js proxy gzips the stream and delivers every event at the end.
+ assert 'no-transform' in r.headers['cache-control']
  ids=[int(l[4:]) for l in data.splitlines() if l.startswith('id: ')]
  assert ids==sorted(set(ids))
  replay=client.get(f'/api/analyses/{aid}/events',headers={'Last-Event-ID':str(ids[-1])}).text
