@@ -8,7 +8,7 @@ from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Header, Requ
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 from PIL import Image, UnidentifiedImageError
-from . import store, graph, llm
+from . import store, graph, llm, segment
 from .pipeline import process
 
 lock=asyncio.Lock();tasks=set()
@@ -49,7 +49,7 @@ def launch(a):
 def busy():
  if any(not t.done() for t in tasks):raise HTTPException(503,'One analysis is already running. Please wait.')
 @app.get('/api/health')
-def health():return {'status':'ready','model':os.getenv('AIAND_MODEL'),'vision_model':os.getenv('AIAND_VISION_MODEL'),'check_model':llm.check_model(),'configured':bool(os.getenv('AIAND_API_KEY'))}
+def health():return {'status':'ready','model':os.getenv('AIAND_MODEL'),'vision_model':os.getenv('AIAND_VISION_MODEL'),'check_model':llm.check_model(),'configured':bool(os.getenv('AIAND_API_KEY')),'segmentation':segment.MODEL if segment.enabled() else None}
 def check_image(raw):
  if len(raw)>10*1024*1024:raise HTTPException(413,'Each image must be 10 MB or less.')
  try:
@@ -93,6 +93,14 @@ def asset(aid:str,asset:str):
  match=next((x for x in a.get('assets',[]) if x['id']==asset),None)
  if not match:raise HTTPException(404,'Asset not found')
  return FileResponse(store.DATA/match['id'],media_type=match['mime_type'])
+@app.get('/api/analyses/{aid}/masks/{observation}')
+def mask(aid:str,observation:str):
+ a=find(aid)
+ # Same rule as assets: only masks recorded on this analysis's observations.
+ match=next((o for o in a.get('observations',[]) if o['id']==observation and o.get('mask')),None)
+ path=store.DATA/segment.mask_name(a,match['id']) if match else None
+ if not path or not path.is_file():raise HTTPException(404,'Mask not found')
+ return FileResponse(path,media_type='image/png')
 @app.get('/api/analyses/{aid}/graph')
 async def read_graph(aid:str,revision:Optional[int]=None):
  a=find(aid);rev=a['display_revision'] if revision is None else revision

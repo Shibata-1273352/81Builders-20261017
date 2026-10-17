@@ -76,3 +76,12 @@ def test_T09_failure_not_completed(client,monkeypatch):
  events=store.events(aid,0)
  assert not any(e['type']=='explanation.updated' for e in events)
  assert events[-1]['payload']['status']=='failed'
+
+def test_masks_only_for_recorded_observations(client):
+ aid=create(client);a=store.get(aid)
+ a['observations']=[dict(id='observation-1-1',asset_id=a['assets'][0]['id'],text='Lanterns',bbox=[.1,.1,.2,.2],mask=dict(score=.9,instance_count=1,area=.01,segmenter='facebook/sam3')),dict(id='observation-1-2',asset_id=a['assets'][0]['id'],text='Steps',bbox=None,mask=None)]
+ store.save(a);Image.new('LA',(4,4)).save(store.DATA/f'{aid}-observation-1-1-mask.png')
+ r=client.get(f'/api/analyses/{aid}/masks/observation-1-1');assert r.status_code==200 and r.headers['content-type']=='image/png'
+ assert client.get(f'/api/analyses/{aid}/masks/observation-1-2').status_code==404
+ assert client.get(f'/api/analyses/{aid}/masks/..%2Ftsumugi.sqlite').status_code==404
+ assert client.get(f'/api/analyses/{create(client)}/masks/observation-1-1').status_code==404
