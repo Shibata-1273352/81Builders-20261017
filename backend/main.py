@@ -7,7 +7,8 @@ load_dotenv(Path(__file__).resolve().parents[1]/'.env')
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Header, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field, field_validator
-from PIL import Image, UnidentifiedImageError
+from PIL import Image, ImageOps, UnidentifiedImageError
+ORIENTATION=0x0112
 from . import store, graph, llm, segment, culture
 from .pipeline import process
 
@@ -59,6 +60,13 @@ def check_image(raw):
   pic.verify()
  except (UnidentifiedImageError,OSError,Image.DecompressionBombError):raise HTTPException(415,'Invalid image. Use JPEG or PNG.')
  return pic
+def upright_image(raw,fmt):
+ pic=Image.open(io.BytesIO(raw))
+ if pic.getexif().get(ORIENTATION,1)==1:return raw,pic
+ pic=ImageOps.exif_transpose(pic);out=io.BytesIO()
+ if fmt=='PNG':pic.save(out,'PNG')
+ else:pic.convert('RGB').save(out,'JPEG',quality=95)
+ return out.getvalue(),pic
 @app.post('/api/analyses',status_code=202)
 async def create(images:List[UploadFile]=File(...),text:str=Form(...),locale:str=Form('en')):
  busy()
@@ -70,9 +78,12 @@ async def create(images:List[UploadFile]=File(...),text:str=Form(...),locale:str
  aid=str(uuid.uuid4());assets=[]
  for index,(raw,pic) in enumerate(zip(raws,pics),1):
   asset=f"{aid}-{index}"+('.png' if pic.format=='PNG' else '.jpg')
-  (store.DATA/asset).write_bytes(raw)
+  # Camera photos often store pixels sideways with an EXIF orientation that browsers apply but models do not.
+  # Store them upright so the page, the VLM boxes and the SAM3 masks all share one set of pixels.
+  stored,upright=upright_image(raw,pic.format)
+  (store.DATA/asset).write_bytes(stored)
   # Re-encode to strip metadata and cap external-model payload size.
-  model=Image.open(io.BytesIO(raw)).convert('RGB');size=model.size;model.thumbnail((1600,1600));model.save(store.DATA/f"{aid}-{index}-model.jpg",'JPEG',quality=90)
+  model=upright.convert('RGB');size=model.size;model.thumbnail((1600,1600));model.save(store.DATA/f"{aid}-{index}-model.jpg",'JPEG',quality=90)
   assets.append(dict(id=asset,index=index,mime_type='image/png' if pic.format=='PNG' else 'image/jpeg',width=size[0],height=size[1]))
  digest=hashlib.sha256()
  for raw in raws:digest.update(hashlib.sha256(raw).digest())
