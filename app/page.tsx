@@ -69,7 +69,7 @@ export default function Page(){
  const [analysis,setAnalysis]=useState<Analysis|null>(null),[selected,setSelected]=useState<string|null>(null),[activeAsset,setActiveAsset]=useState(''),[events,setEvents]=useState<Event[]>([]),[error,setError]=useState(''),[submitting,setSubmitting]=useState(false),[sourceForm,setSourceForm]=useState(false),[showChanges,setShowChanges]=useState(true),[tab,setTab]=useState('meaning'),[,setTick]=useState(0),[title,setTitle]=useState(''),[sourceText,setSourceText]=useState(''),[sourceUrl,setSourceUrl]=useState(''),[publisher,setPublisher]=useState(''),[place,setPlace]=useState(''),[timeStart,setTimeStart]=useState(''),[timeEnd,setTimeEnd]=useState('');
  const [graph,setGraph]=useState<Graph|null>(null),[impact,setImpact]=useState<Impact|null>(null),[hover,setHover]=useState<string[]>([]),[toast,setToast]=useState<{en:string;ja:string;go:()=>void}|null>(null),[noteSel,setNoteSel]=useState<string|null>(null);
  const toastTimer=useRef<ReturnType<typeof setTimeout>>(undefined);
- const fileInput=useRef<HTMLInputElement>(null),eventSource=useRef<EventSource|null>(null),currentRevision=useRef(0),lastEvent=useRef(0),panel=useRef<HTMLElement>(null),evidenceButton=useRef<HTMLButtonElement>(null),impacts=useRef<Record<string,Impact>>({});
+ const fileInput=useRef<HTMLInputElement>(null),eventSource=useRef<EventSource|null>(null),currentId=useRef<string|null>(null),currentRevision=useRef(0),lastEvent=useRef(0),panel=useRef<HTMLElement>(null),evidenceButton=useRef<HTMLButtonElement>(null),impacts=useRef<Record<string,Impact>>({});
  const running=analysis?.status==='running';
  const [present,togglePresent]=usePresent();
  useEffect(()=>{try{const v=localStorage.getItem('tsumugi-lang');if(v==='en'||v==='ja'||v==='both')setMode(v)}catch{}},[]);
@@ -79,17 +79,18 @@ export default function Page(){
  useEffect(()=>{if(selected)panel.current?.focus({preventScroll:true})},[selected]);
  useEffect(()=>{if(!analysis||!analysis.display_revision)return;let live=true;api(`/api/analyses/${analysis.id}/graph?revision=${analysis.display_revision}`).then(g=>{if(live)setGraph(g)}).catch(()=>{});return()=>{live=false}},[analysis?.id,analysis?.display_revision]);
  function subscribe(id:string,revision:number){
-  eventSource.current?.close();currentRevision.current=revision;
+  eventSource.current?.close();currentId.current=id;currentRevision.current=revision;
   const es=new EventSource(`/api/analyses/${id}/events?after=${lastEvent.current}`);eventSource.current=es;
   es.onmessage=async message=>{
+   if(currentId.current!==id){es.close();return}
    const event:Event=JSON.parse(message.data);if(event.event_id<=lastEvent.current)return;lastEvent.current=event.event_id;
    if(event.revision<currentRevision.current)return;
    setEvents(items=>[...items,event]);
-   try{const result:Analysis=await api(`/api/analyses/${id}`);if(result.revision>=currentRevision.current){setAnalysis(result);currentRevision.current=result.revision;}if(event.type==='regions.segmented')announce(result,String(event.payload.asset_id));if(event.type==='culture.ready')announceCulture(result);}
+   try{const result:Analysis=await api(`/api/analyses/${id}`);if(currentId.current!==id){es.close();return}if(result.revision>=currentRevision.current){setAnalysis(result);currentRevision.current=result.revision;}if(event.type==='regions.segmented')announce(result,String(event.payload.asset_id));if(event.type==='culture.ready')announceCulture(result);}
    catch(e){setError((e as Error).message)}
    if(event.type==='analysis.completed')es.close();
   };
-  es.onerror=async()=>{try{const result:Analysis=await api(`/api/analyses/${id}`);if(result.revision>=currentRevision.current)setAnalysis(result);if(result.status!=='running')es.close();}catch{setError('Connection interrupted. Your saved results will remain available.')}};
+  es.onerror=async()=>{try{const result:Analysis=await api(`/api/analyses/${id}`);if(currentId.current!==id){es.close();return}if(result.revision>=currentRevision.current)setAnalysis(result);if(result.status!=='running')es.close();}catch{setError('Connection interrupted. Your saved results will remain available.')}};
  }
  function announce(a:Analysis,assetId:string){
   // SAM3 masks arrive seconds after everything else; say so, with the count SAM3 itself produced.
@@ -116,8 +117,15 @@ export default function Page(){
  }
  function removeFile(i:number){URL.revokeObjectURL(files[i].url);const next=files.filter((_,j)=>j!==i);setFiles(next);setPreviewIndex(p=>Math.min(p,Math.max(0,next.length-1)));if(!next.length)setExample(false)}
  async function useExample(){setError('');try{const blobs=await Promise.all(sampleImages.map(async u=>(await fetch(u)).blob()));files.forEach(f=>URL.revokeObjectURL(f.url));setFiles(blobs.map((b,i)=>{const file=new File([b],`example-${i+1}.jpg`,{type:'image/jpeg'});return {file,url:URL.createObjectURL(file)}}));setPreviewIndex(0);setText(sampleText);setExample(true)}catch{setError('The example images could not be loaded.')}}
- async function start(e:FormEvent){e.preventDefault();if(!files.length)return;setSubmitting(true);setError('');try{const form=new FormData();files.forEach(f=>form.append('images',f.file));form.append('text',text);form.append('locale','en');const result=await api('/api/analyses',{method:'POST',body:form});lastEvent.current=0;setEvents([]);setGraph(null);impacts.current={};const a:Analysis=await api(`/api/analyses/${result.analysis_id}`);setAnalysis(a);setActiveAsset(a.assets[0]?.id||'');subscribe(result.analysis_id,result.revision);}catch(e){setError((e as Error).message)}finally{setSubmitting(false)}}
- function reset(){eventSource.current?.close();setAnalysis(null);setSelected(null);setNoteSel(null);setEvents([]);setError('');setSourceForm(false);setGraph(null);setImpact(null);lastEvent.current=0;}
+ async function start(e:FormEvent){e.preventDefault();if(!files.length)return;setSubmitting(true);setError('');try{const form=new FormData();files.forEach(f=>form.append('images',f.file));form.append('text',text);form.append('locale','en');const result=await api('/api/analyses',{method:'POST',body:form});lastEvent.current=0;setEvents([]);setGraph(null);impacts.current={};clearView();const a:Analysis=await api(`/api/analyses/${result.analysis_id}`);setAnalysis(a);setActiveAsset(a.assets[0]?.id||'');subscribe(result.analysis_id,result.revision);}catch(e){setError((e as Error).message)}finally{setSubmitting(false)}}
+ // Per-analysis view state, cleared whenever a new analysis starts or the screen returns to the start.
+ function clearView(){setSelected(null);setNoteSel(null);setHover([]);clearTimeout(toastTimer.current);setToast(null);setTab('meaning');setShowChanges(true);setImpact(null);setSourceForm(false)}
+ function reset(){
+  // Back to an empty start screen: the previous photos and caption must not join the next analysis.
+  eventSource.current?.close();currentId.current=null;lastEvent.current=0;
+  files.forEach(f=>URL.revokeObjectURL(f.url));setFiles([]);setText('');setExample(false);setPreviewIndex(0);
+  setAnalysis(null);setEvents([]);setError('');setGraph(null);impacts.current={};clearView();
+ }
  const selectedExplanation=analysis?.explanations.find(e=>e.id===selected);
  const selectedClaim=analysis?.claims.find(c=>c.id===selected||selectedExplanation?.claim_ids.includes(c.id));
  const assessment=analysis?.assessments.find(a=>a.claim_id===selectedClaim?.id);

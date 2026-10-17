@@ -25,16 +25,23 @@ def sam(monkeypatch):
   if sam.fail:raise RuntimeError('SAM3 /segment failed (HTTP 500)')
   if path=='/segment':
    await asyncio.sleep(sam.delay)
-   return dict(width=100,height=100,encode_ms=1,decode_ms=1,results={'person':[INSIDE,OUTSIDE,WEAK],'lantern':[instance([.2,.15,.3,.25])]})
+   return dict(width=100,height=100,encode_ms=1,decode_ms=1,results={l:sam.results[l] for l in body['labels'] if l in sam.results})
   return {'encode_ms':1}
  monkeypatch.setattr(segment,'post',post)
  sam.calls=calls;sam.fail=False;sam.delay=0
+ sam.results={'person':[INSIDE,OUTSIDE,WEAK],'lantern':[instance([.2,.15,.3,.25])]}
  return sam
 
 def test_select_keeps_confident_instances_inside_the_box():
  assert segment.select([INSIDE,OUTSIDE,WEAK],[.33,.68,.39,.21])==[INSIDE]
  # Mostly outside the candidate box: not this observation's instance.
  assert segment.select([instance([.6,.6,.9,.7])],[.33,.68,.39,.21])==[]
+
+def test_simplify_reduces_labels_to_nouns():
+ assert segment.simplify('people pulling ropes')==['people']
+ assert segment.simplify('person on roof')==['person']
+ assert segment.simplify('ornate float')==['float']
+ assert segment.simplify('person')==[] and segment.simplify('wooden building')==['building']
 
 def test_compose_unions_instances_as_alpha():
  image,area=segment.compose([INSIDE,instance([.45,.7,.55,.85])],100,100)
@@ -83,3 +90,23 @@ def test_graph_region_records_mask(run,sam):
  assert region['segmenter']=='facebook/sam3' and region['prompt']=='person' and region['instance_count']==1
  seg=next(r['id'] for r in a['runs'] if r['tool']=='Image segmentation · 1')
  assert any(e['type']=='GENERATED_BY' and e['a'].endswith(':region-observation-1-1') and e['b'].endswith(':'+seg) for e in p['edges'])
+
+def wordy(tool,data):
+ value=labelled(tool,data)
+ if tool=='Image observation · 1':value['observations'][0]['label']='people pulling ropes'
+ return value
+
+def test_empty_label_is_asked_again_in_simpler_words(run,sam):
+ sam.results['people']=sam.results.pop('person')
+ a=run(wordy);o=a['observations'][0]
+ assert [b['labels'] for p,b in sam.calls if p=='/segment' and b['image']=='a-1-model.jpg']==[['people pulling ropes'],['people']]
+ assert o['mask']['instance_count']==1 and o['mask']['prompt']=='people' and o['label']=='people pulling ropes'
+ assert not any(l['text'].startswith('SAM3 found') for l in a['limitations'])
+ region=next(n for n in graph.payload({**a,'input_hash':'h'})['nodes'] if n['props']['id']=='region-observation-1-1')['props']
+ assert region['prompt']=='people'
+
+def test_still_empty_after_retry_keeps_the_box_and_says_so(run,sam):
+ a=run(wordy);o=a['observations'][0]
+ assert o['mask'] is None and o['bbox']==[0.33,0.68,0.39,0.21]
+ assert {l['text'] for l in a['limitations'] if l['text'].startswith('SAM3 found')}=={segment.SEG_MISSED[0].format(n=1)}
+ assert a['observations'][2]['mask']['prompt']=='lantern'
