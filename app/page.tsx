@@ -1,11 +1,13 @@
 'use client';
-import { useState, useEffect, useRef, useContext, createContext, FormEvent, ReactNode } from 'react';
+import { useState, useEffect, useRef, FormEvent } from 'react';
 import { ArrowUpRight, ArrowRight, Plus, X, Upload, Check, CircleHelp, AlertCircle, ChevronDown, ChevronLeft, ExternalLink, BookOpen, Eye, RefreshCw, Minus, LoaderCircle, History, Network, ShieldCheck } from 'lucide-react';
 import exampleSource from '../public/demo/source.json';
 import credits from '../public/demo/attribution.json';
+import { Lang, Bi, Mode } from './i18n';
+import GraphView from './graph/GraphView';
+import { obsLabel, shortModel, Graph, GNode, Impact } from './graph/model';
 
 type Status='confirmed'|'contradicted'|'unresolved';
-type Mode='both'|'en'|'ja';
 type Asset={id:string;index:number;mime_type:string;width?:number;height?:number};
 type Observation={id:string;asset_id:string;text:string;text_ja?:string|null;bbox:number[]|null};
 type Claim={id:string;text:string;text_ja?:string|null;input_start:number;input_end:number;kind:string;observation_ids?:string[]};
@@ -17,10 +19,6 @@ type Run={id:string;tool:string;model_id:string;latency_ms?:number;status:string
 type Limitation=string|{text:string;text_ja?:string};
 type Analysis={id:string;revision:number;display_revision:number;status:string;text:string;assets:Asset[];created_at:string;started_at?:string;updated_at:string;claims:Claim[];observations:Observation[];assessments:Assessment[];explanations:Explanation[];sources:Source[];limitations:Limitation[];error?:string;stale_claim_ids?:string[];runs:Run[];changes:{claim_id:string;before:string;before_ja?:string|null;after:string;after_ja?:string|null;from_status:Status;to_status:Status;changed:boolean}[]};
 type Event={event_id:number;revision:number;type:string;timestamp:string;payload:Record<string,unknown>};
-type GNode={id:string;label:string;[key:string]:unknown};
-type GEdge={source:string;target:string;type:string;stance?:string;candidate?:boolean};
-type Graph={nodes:GNode[];edges:GEdge[];stored:string;revision:number;node_count:number;relationship_count:number};
-type Impact={source_id:string;passage_ids:string[];assessment_ids:string[];claim_ids:string[];explanation_ids:string[]};
 const sampleText='Gion Matsuri is held throughout July. Both photographs were taken in Kyoto in 2026.';
 const sampleImages=['/demo/gion.jpg','/demo/gion-1905.jpg'];
 // Fixed interface wording in both languages; model output carries its own text_ja.
@@ -44,70 +42,13 @@ const T={
 };
 const stanceNames:Record<string,[string,string]>={supports:['supports','支持'],contradicts:['contradicts','反証'],context_only:['context only','文脈のみ']};
 const eventLabels:Record<string,string>={'tool.started':'Working with ai&','tool.completed':'Model step completed','analysis.started':'Untangling the images and words','observations.ready':'Image observations ready','claims.ready':'Claims extracted from your text','claims.linked':'Claims linked to image candidates','evidence.retrieved':'Checking the registered sources','claim.assessed':'Claim checked against evidence','explanation.updated':'Explanation updated','analysis.completed':'Analysis finished','tool.failed':'A step needs attention'};
-// Graph lanes, top to bottom, in the order evidence flows.
-const LANES:{label:string;en:string;ja:string;color:string;note:string}[]=[
- {label:'Asset',en:'Images',ja:'画像',color:'#272c28',note:'uploaded'},{label:'Region',en:'Regions',ja:'領域',color:'#8c6d32',note:'VLM candidate'},{label:'Observation',en:'Observations',ja:'観察',color:'#366348',note:''},
- {label:'Claim',en:'Claims',ja:'主張',color:'#aa4934',note:''},{label:'Assessment',en:'Assessments',ja:'判定',color:'#4f5d8a',note:''},{label:'Passage',en:'Passages',ja:'引用',color:'#2f6f7a',note:'server-extracted'},
- {label:'Source',en:'Sources',ja:'出典',color:'#7a4f6d',note:'user-registered'},{label:'Explanation',en:'Explanations',ja:'説明',color:'#6f7266',note:''}];
-const Lang=createContext<Mode>('both');
-function pick(mode:Mode,en:string,ja?:string|null){return !ja||mode==='en'?en:mode==='ja'?ja:`${en} · ${ja}`}
-function Bi({en,ja,inline}:{en:ReactNode;ja?:ReactNode|null;inline?:boolean}){const mode=useContext(Lang);if(!ja||mode==='en')return <span lang="en">{en}</span>;if(mode==='ja')return <span lang="ja">{ja}</span>;return <span className={'bi'+(inline?' inline':'')}><span lang="en">{en}</span><span lang="ja">{ja}</span></span>}
 function Tx({k,inline}:{k:keyof typeof T;inline?:boolean}){return <Bi en={T[k][0]} ja={T[k][1]} inline={inline}/>}
 function Logo(){return <a className="logo" href="/" aria-label="TSUMUGI home"><svg viewBox="0 0 32 32" width="30" height="30" fill="none" aria-hidden="true"><path d="M6 2v28M16 2v28M26 2v28M2 6h28M2 16h28M2 26h28" stroke="currentColor" strokeWidth="1.7"/><path d="M6 6l20 20M6 26L26 6" stroke="currentColor" strokeWidth="1"/></svg><span>TSUMUGI</span></a>}
 function Badge({status}:{status:Status}){const Icon=status==='confirmed'?Check:status==='contradicted'?AlertCircle:CircleHelp;return <span className={'badge '+status}><Icon size={13}/><Tx k={status} inline/></span>}
 function Stale(){return <span className="badge stale"><LoaderCircle size={12} className="spin"/><Tx k="stale" inline/></span>}
 function ImageLabel({n}:{n:number}){return <Bi en={`Image ${n}`} ja={`画像${n}`} inline/>}
-function obsLabel(id:string){const m=id.match(/(\d+)-(\d+)$/);return m?`${m[1]}.${m[2]}`:id}
-function shortModel(id:string){return id.split('/').pop()||id}
 async function api(path:string,options?:RequestInit){const r=await fetch(path,options);const value=await r.json();if(!r.ok)throw new Error(typeof value.detail==='string'?value.detail:'The request could not be completed. Please check your input.');return value;}
 
-function nodeLabel(n:GNode){
- const num=(n.id.match(/(\d+)$/)||[])[1];
- switch(n.label){
-  case 'Asset':return `Image ${n.index}`;
-  case 'Region':return (n.bbox_normalized?'R ':'Whole ')+obsLabel(n.id);
-  case 'Observation':return 'O '+obsLabel(n.id);
-  case 'Claim':return 'C'+num;
-  case 'Assessment':return 'C'+(n.id.match(/claim-(\d+)/)||[])[1]+' '+String(n.status||'');
-  case 'Passage':return '“'+String(n.quote||'').replace(/\s+/g,' ').trim();
-  case 'Explanation':return 'E·'+(n.id.includes('observation')?'O'+obsLabel(n.id):'C'+num);
-  default:return String(n.name||n.id);
- }
-}
-function GraphView({graph,expected,focus,impact,onPick}:{graph:Graph;expected:number;focus:string|null;impact:Impact|null;onPick:(n:GNode)=>void}){
- const mode=useContext(Lang);const [hover,setHover]=useState<string|null>(null);
- const W=780,X0=158,RH=58,NH=24;
- const byId=Object.fromEntries(graph.nodes.map(n=>[n.id,n]));
- const rows=LANES.map(l=>graph.nodes.filter(n=>n.label===l.label).sort((a,b)=>a.id.localeCompare(b.id,undefined,{numeric:true})));
- const pos:Record<string,{x:number;y:number;w:number}>={};
- rows.forEach((nodes,r)=>{const span=(W-X0-8)/Math.max(nodes.length,1),w=Math.min(118,span-8);nodes.forEach((n,i)=>{pos[n.id]={x:X0+span*i+span/2,y:r*RH+RH/2+4,w}})});
- const edges=graph.edges.filter(e=>pos[e.source]&&pos[e.target]);
- // Lane captions name the ai& model that generated each kind of record (via GENERATED_BY → ToolRun).
- const models:Record<string,Set<string>>={};
- graph.edges.filter(e=>e.type==='GENERATED_BY').forEach(e=>{const s=byId[e.source],r=byId[e.target];if(s&&r?.model_id)(models[s.label]??=new Set()).add(shortModel(String(r.model_id)))});
- const checks=new Set(graph.nodes.filter(n=>n.label==='Explanation'&&n.check_verdict==='accepted').map(n=>shortModel(String(n.check_model))));
- const active=hover||focus;const near=new Set<string>();
- if(active){near.add(active);edges.forEach(e=>{if(e.source===active)near.add(e.target);if(e.target===active)near.add(e.source)})}
- const hit=impact?new Set([impact.source_id,...impact.passage_ids,...impact.assessment_ids,...impact.claim_ids,...impact.explanation_ids]):null;
- const lit=(id:string)=>hit?hit.has(id):active?near.has(id):true;
- const detail=active?byId[active]:null;
- // Until the new revision is read back, the previous graph stays visible but is marked as outdated.
- const loading=graph.revision!==expected;
- return <div className={'graph-view'+(loading?' loading':'')}>
-  <div className="graph-meta">{loading?<LoaderCircle size={15} className="spin"/>:<Network size={15}/>}<span>{loading?<Bi en={`Loading revision ${expected} from Neo4j… showing rev ${graph.revision}`} ja={`Neo4j からリビジョン${expected}を読み込み中…（rev ${graph.revision} を表示中）`} inline/>:<>{graph.stored==='neo4j'?'Stored in Neo4j':'Local snapshot (Neo4j unreachable)'} · rev {graph.revision} · {graph.node_count} nodes / {graph.relationship_count} relationships</>}</span></div>
-  <div className="graph-scroll"><svg viewBox={`0 0 ${W} ${LANES.length*RH+8}`} className="graph-svg" role="group" aria-label="Evidence graph">
-   {LANES.map((l,r)=><g key={l.label}><rect x={0} y={r*RH+4} width={W} height={RH} className={r%2?'lane odd':'lane'}/><circle cx={10} cy={r*RH+RH/2-2} r={4} fill={l.color}/><text x={20} y={r*RH+RH/2+1} className="lane-name">{pick(mode,l.en,l.ja)}</text><text x={20} y={r*RH+RH/2+14} className="lane-model">{[...(models[l.label]||[]),...(l.label==='Explanation'?[...checks].map(m=>'✓ '+m):[])].join(' · ')||l.note}</text></g>)}
-   {edges.map((e,i)=>{const a=pos[e.source],b=pos[e.target];const down=a.y<b.y;const y1=a.y+(down?NH/2:-NH/2),y2=b.y+(down?-NH/2:NH/2),m=(y1+y2)/2;const on=hit?hit.has(e.source)&&hit.has(e.target):active?(e.source===active||e.target===active):false;
-    return <path key={i} d={`M${a.x},${y1} C${a.x},${m} ${b.x},${m} ${b.x},${y2}`} className={'edge '+e.type.toLowerCase()+(e.stance?' '+e.stance:'')+(on?' on':'')+((hit||active)&&!on?' dim':'')}><title>{e.type}{e.stance?` (${e.stance})`:''}{e.candidate?' · candidate':''}</title></path>})}
-   {rows.flat().map(n=>{const p=pos[n.id],lane=LANES.find(l=>l.label===n.label)!;const text=nodeLabel(n),max=Math.floor(p.w/6.1);
-    return <g key={n.id} className={'gnode'+(lit(n.id)?'':' dim')+(n.id===focus?' focus':'')+(hit?.has(n.id)?' impact':'')} transform={`translate(${p.x-p.w/2},${p.y-NH/2})`} tabIndex={0} role="button" aria-label={`${lane.en}: ${String(n.text||n.quote||n.title||text)}`} onMouseEnter={()=>setHover(n.id)} onMouseLeave={()=>setHover(null)} onFocus={()=>setHover(n.id)} onBlur={()=>setHover(null)} onClick={()=>onPick(n)} onKeyDown={e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();onPick(n)}}}>
-     <rect width={p.w} height={NH} rx={3} style={{stroke:lane.color}} className={n.label==='Assessment'?'status-'+String(n.status):n.label==='Source'&&n.active===false?'inactive':''}/><rect width={4} height={NH} rx={1} fill={lane.color}/>
-     <text x={9} y={NH/2+3.5}>{text.length>max?text.slice(0,max-1)+'…':text}</text></g>})}
-  </svg></div>
-  <div className="graph-legend">{LANES.map(l=><span key={l.label}><i style={{background:l.color}}/>{l.label}</span>)}<span><i className="dash"/>LINKED_TO (candidate)</span></div>
-  <div className="graph-detail" aria-live="polite">{detail?<><span className="small-label">{detail.label} · {detail.id}</span><p><Bi en={String(detail.text||detail.quote||detail.title||detail.reason||detail.name||'')} ja={(detail.text_ja||detail.quote_ja||detail.reason_ja) as string|undefined}/></p></>:<p className="hint"><Bi en="Hover a node to see its neighbours; select it to open its evidence. Hover Disable on a source to trace its impact." ja="ノードにカーソルを合わせると隣接ノードを表示し、選ぶと根拠を開きます。出典の Disable にカーソルを合わせると影響範囲をたどれます。"/></p>}</div>
- </div>
-}
 function Timeline({runs,since,running}:{runs:Run[];since?:string;running:boolean}){
  // Gantt of this revision's model calls, from ToolRun started_at and latency.
  const items=runs.filter(r=>r.started_at&&(!since||r.started_at>=since));
@@ -228,7 +169,7 @@ export default function Page(){
      <p className="region-note"><Tx k={selectedClaim&&linked.size?'linkNote':analysis.observations.some(o=>o.bbox)?'regionNote':'noRegion'}/></p>
     </section>
     <section className={'meaning-column '+(tab!=='original'?'mobile-visible':'')}><div className="section-label view-switch"><span>02 / {viewTab==='graph'?'GRAPH':'MEANING'}</span><span className="segmented" role="group" aria-label="Center view">{(['meaning','graph'] as const).map(v=><button key={v} className={viewTab===v?'active':''} aria-pressed={viewTab===v} onClick={()=>setTab(v)}>{v==='graph'&&<Network size={12}/>}<Tx k={v} inline/></button>)}</span></div>
-     {viewTab==='graph'?(graph?<GraphView graph={graph} expected={analysis.display_revision} focus={focusNode} impact={impact} onPick={pickNode}/>:<div className="pending"><span className="skeleton"/><span className="skeleton short"/><p>{running?'The graph is written once the first verified revision is ready…':'Loading the graph from Neo4j…'}</p></div>):<>
+     {viewTab==='graph'?<GraphView analysis={analysis} graph={graph} running={running} focus={focusNode} impact={impact} compact={!!selected} busy={submitting} onPick={pickNode} onImpact={sid=>sid?showImpact(sid):setImpact(null)} onToggleSource={(sid,active)=>mutate(`sources/${sid}`,{active,expected_revision:analysis.revision},'PATCH')}/>:<>
      {analysis.changes.length>0&&<div className="changes"><button className="changes-heading" onClick={()=>setShowChanges(!showChanges)}><span><History size={17}/> <Tx k="changed" inline/> <b>{analysis.changes.filter(c=>c.changed).length}</b></span><ChevronDown size={17} style={{transform:showChanges?'rotate(180deg)':''}}/></button>{showChanges&&<div className="changes-body">{analysis.changes.map(c=><div key={c.claim_id} className="change-item"><div className="change-status"><Badge status={c.from_status}/><ArrowRight size={13}/><Badge status={c.to_status}/></div>{c.changed?<><p className="before"><Minus size={13}/><Bi en={c.before} ja={c.before_ja}/></p><p className="after"><Plus size={13}/><Bi en={c.after} ja={c.after_ja}/></p></>:<p><Tx k="stillUnresolved"/></p>}<button className="text-button" onClick={()=>setSelected(c.claim_id)}><Tx k="seeWhy" inline/> <ArrowUpRight size={14}/></button></div>)}</div>}</div>}
      {(['see','context','unknown'] as const).map((section,index)=><div className={'meaning-section '+section} key={section}><div className="meaning-title"><span>{String(index+1).padStart(2,'0')}</span><h2><Tx k={section}/></h2>{section==='see'?<Eye size={18}/>:section==='context'?<BookOpen size={18}/>:<CircleHelp size={18}/>}</div><div className="explanation-list">{(section==='see'&&running&&!results.some(e=>e.section==='see')?analysis.observations.map(o=>({id:o.id,section:'see',text:o.text,text_ja:o.text_ja,claim_ids:[],support_ids:[{id:o.id,type:'Observation',revision:analysis.revision}]} as Explanation)):results.filter(e=>e.section===section)).map(e=>{const a=analysis.assessments.find(a=>e.claim_ids.includes(a.claim_id));const o=analysis.observations.find(o=>e.support_ids.some(s=>s.id===o.id));return <button className={'explanation '+(selected===e.id?'selected ':'')+(e.claim_ids.some(c=>impacted.has(c))?'impacted':'')} key={e.id} onClick={()=>setSelected(e.id)}><span className="explanation-badges">{a?<Badge status={a.status}/>:<span className="observation-label"><Tx k="visual" inline/>{o&&<> · <ImageLabel n={Number(o.id.split('-')[1])}/> · {obsLabel(o.id)}</>}</span>}{e.claim_ids.some(c=>stale.has(c))&&<Stale/>}</span><p><Bi en={e.text} ja={e.text_ja}/></p><span className="explanation-link">{section==='see'?<Tx k="locate" inline/>:<Tx k="follow" inline/>} <ArrowUpRight size={14}/>{e.check&&<span className={'check-note '+e.check.verdict}><ShieldCheck size={12}/>{e.check.verdict==='accepted'?<><Tx k="checked" inline/> · {shortModel(e.check.model_id)}</>:<Tx k="rejected" inline/>}</span>}</span></button>})}{!results.some(e=>e.section===section)&&!(section==='see'&&analysis.observations.length)&&(running?<div className="pending"><span className="skeleton"/><span className="skeleton short"/><p>{section==='see'?'Looking at the images…':section==='context'?'Connecting claims and sources…':'Checking what remains uncertain…'}</p></div>:<p className="empty-section">{section==='context'?'Add a source to explore the cultural context.':section==='unknown'?'No unresolved claims in the current evidence scope.':'No image observations available.'}</p>)}</div></div>)}
      </>}
