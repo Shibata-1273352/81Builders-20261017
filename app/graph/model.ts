@@ -8,6 +8,15 @@ export type Impact={source_id:string;passage_ids:string[];assessment_ids:string[
 export function obsLabel(id:string){const m=id.match(/(\d+)-(\d+)$/);return m?`${m[1]}.${m[2]}`:id}
 export function shortModel(id:string){return id.split('/').pop()||id}
 const byNum=(a:{id:string},b:{id:string})=>a.id.localeCompare(b.id,undefined,{numeric:true});
+
+// Six colours that stay apart on a projector. Each observation keeps its colour, by id order, on the image,
+// in Meaning, on cultural notes and in the Graph.
+export const PALETTE=['#f76707','#1c7ed6','#d6336c','#2f9e44','#7048e8','#0c8599'];
+export function obsColors(ids:string[]):Record<string,string>{
+ return Object.fromEntries([...new Set(ids)].map(id=>({id})).sort(byNum).map((o,i)=>[o.id,PALETTE[i%PALETTE.length]]));
+}
+// "24 × paper lanterns" when SAM3 counted several instances, otherwise the label alone.
+export function countLabel(label?:string|null,count?:number){return label?count&&count>1?`${count} × ${label}`:label:''}
 const str=(v:unknown)=>typeof v==='string'&&v?v:undefined;
 
 // Crop box [x,y,w,h] in 0..1. A segmentation mask, when present, wins over the bbox; any other shape is ignored.

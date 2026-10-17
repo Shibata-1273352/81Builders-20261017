@@ -1,8 +1,8 @@
 'use client';
-import { useState, useEffect, useLayoutEffect, useRef, useContext, useMemo, useCallback, KeyboardEvent, ReactNode } from 'react';
+import { useState, useEffect, useLayoutEffect, useRef, useContext, useMemo, useCallback, KeyboardEvent, ReactNode, CSSProperties } from 'react';
 import { Check, AlertCircle, CircleHelp, LoaderCircle, Network, ShieldCheck, Database, Copy, GitCompare } from 'lucide-react';
 import { Lang, Bi } from '../i18n';
-import { buildView, draftGraph, diffGraphs, cypherFor, obsLabel, Graph, GNode, Impact, Status, Column, DraftInput, Diff, ObsView } from './model';
+import { buildView, draftGraph, diffGraphs, cypherFor, obsLabel, obsColors, Graph, GNode, Impact, Status, Column, DraftInput, Diff, ObsView } from './model';
 import './graph.css';
 
 type AnalysisLike=DraftInput&{display_revision:number;status:string;stale_claim_ids?:string[]};
@@ -40,9 +40,11 @@ function Crop({src,mask,o,w,h}:{src:string;mask?:string;o:ObsView;w?:number;h?:n
  if(box&&w&&h){const px=Math.max(box[2]*w,box[3]*h);const bw=Math.min(1,px/w),bh=Math.min(1,px/h);box=[Math.min(Math.max(0,box[0]+box[2]/2-bw/2),1-bw),Math.min(Math.max(0,box[1]+box[3]/2-bh/2),1-bh),bw,bh]}
  const size=box?`${100/box[2]}% ${100/box[3]}%`:'100% 100%',pos=box?`${box[2]<1?box[0]/(1-box[2])*100:0}% ${box[3]<1?box[1]/(1-box[3])*100:0}%`:'center';
  const style=box?{backgroundImage:`url(${src})`,backgroundSize:size,backgroundPosition:pos}:{backgroundImage:`url(${src})`,backgroundSize:'cover',backgroundPosition:'center'};
- // The SAM3 mask PNG covers the whole image, so it is cropped with the same size and position as the photo.
+ // The SAM3 mask PNG covers the whole image, so it is cropped with the same size and position as the photo:
+ // the object is cut out of its background.
  const m=mask?`url(${mask})`:'';
- return <span className={'gcrop'+(box?'':' whole')} style={style} aria-hidden="true">{mask&&box&&<span className="gcrop-mask" style={{maskImage:m,WebkitMaskImage:m,maskSize:size,WebkitMaskSize:size,maskPosition:pos,WebkitMaskPosition:pos}}/>}</span>;
+ if(mask&&box)return <span className="gcrop cut" aria-hidden="true"><span className="gcrop-mask" style={{...style,maskImage:m,WebkitMaskImage:m,maskSize:size,WebkitMaskSize:size,maskPosition:pos,WebkitMaskPosition:pos}}/></span>;
+ return <span className={'gcrop'+(box?'':' whole')} style={style} aria-hidden="true"/>;
 }
 
 export default function GraphView({analysis,graph,running,focus,impact,compact,busy,onPick,onImpact,onToggleSource}:Props){
@@ -74,6 +76,7 @@ export default function GraphView({analysis,graph,running,focus,impact,compact,b
  },[analysis.id,rev,onLatest,compare,loaded]);
 
  const view=useMemo(()=>buildView(shown),[shown]);
+ const colors=useMemo(()=>obsColors(view.assets.flatMap(a=>a.observations.map(o=>o.id))),[view]);
  const diff=useMemo(()=>prev&&state!=='reading'?diffGraphs(prev,shown):null,[prev,shown,state]);
  const prevView=useMemo(()=>diff&&prev?buildView(prev):null,[diff,prev]);
  const stale=new Set(running&&latest>0?analysis.stale_claim_ids||[]:[]);
@@ -182,7 +185,7 @@ export default function GraphView({analysis,graph,running,focus,impact,compact,b
       <button className="gmain gasset-head" data-node={a.id} onClick={()=>onPick(a.node)} aria-label={both(`Image ${a.index}: show it large`,`画像${a.index}：大きく表示`)}>
        <img src={assetUrl(a.id)} alt="" onLoad={schedule}/><span><Bi en={`Image ${a.index}`} ja={`画像${a.index}`} inline/></span>{!compact&&models.map(m=><Chip key={m} tone="model">{m}</Chip>)}
       </button>
-      <div className="gobs-list">{a.observations.map(o=><button key={o.id} className={'gmain gcard gobs'+dim(o.id)+(diff?.added.has(o.id)?' is-new':'')} data-node={o.id} onClick={()=>onPick(o.node)} aria-label={both(`Observation ${obsLabel(o.id)}: ${o.text}`,`観察 ${obsLabel(o.id)}：${o.text_ja||o.text}`)}>
+      <div className="gobs-list">{a.observations.map(o=><button key={o.id} className={'gmain gcard gobs'+dim(o.id)+(diff?.added.has(o.id)?' is-new':'')} style={{'--c':colors[o.id]} as CSSProperties} data-node={o.id} onClick={()=>onPick(o.node)} aria-label={both(`Observation ${obsLabel(o.id)}: ${o.text}`,`観察 ${obsLabel(o.id)}：${o.text_ja||o.text}`)}>
        <Crop src={assetUrl(a.id)} mask={o.masked?`/api/analyses/${analysis.id}/masks/${o.id}`:undefined} o={o} w={Number(a.node.width)||undefined} h={Number(a.node.height)||undefined}/>
        <span className="gobs-body"><span className="glabel">{obsLabel(o.id)}{o.regionModel&&o.regionModel!==o.model&&<Chip tone="model">{o.regionModel}</Chip>}<Mark ids={[o.id]} diff={diff}/></span><span className="gclamp two"><Bi en={o.text} ja={o.text_ja}/></span></span>
       </button>)}
