@@ -28,7 +28,11 @@ def test_unicode_spans():
  c=validate_claims({'claims':[{'span':'Kyoto festival.','text':'Kyoto festival.'}]},text)[0]
  assert c['input_start']==2;assert text[c['input_start']:c['input_end']]=='Kyoto festival.'
 def test_bad_span_rejected():
- with pytest.raises(ValueError):validate_claims({'claims':[{'span':'hallucinated'}]},'Original')
+ assert validate_claims({'claims':[{'span':'hallucinated'},{'span':None}]},'Original')==[]
+def test_span_tolerates_quotes_spaces_and_case():
+ text='Gion Matsuri is held in July.'
+ c=validate_claims({'claims':[{'span':' “gion matsuri is held in July.” '}]},text)[0]
+ assert text[c['input_start']:c['input_end']]==text and c['text']==text
 def test_code_reasons_are_fixed_in_both_languages():
  c=claim();c['kind']='photo_identity'
  x=assess(c,{'reason':'Model prose','reason_ja':'モデルの文','citations':[citation()]},[source()])
@@ -201,3 +205,22 @@ def test_reevaluation_reuses_cultural_notes(run):
  run.again(a)
  assert not any(c['tool'].startswith('Cultural') for c in run.calls)
  assert a['cultural_notes']==notes and a['assessments'][0]['status']=='unresolved'
+
+def no_claims(tool,data):return {'claims':[{'text':'Concept.','span':'not in the caption'}]} if tool=='Claim extraction' else base(tool,data)
+def test_caption_without_claims_still_describes_the_images(run):
+ # A one-word caption like "コンセプト" has nothing to check; the images are still observed and explained.
+ a=run(no_claims)
+ assert a['status']=='partial' and a['claims']==[] and a['assessments']==[]
+ assert [o['id'] for o in a['observations']]==['observation-1-1','observation-1-2','observation-2-1'] and a['cultural_notes']
+ assert [l['text'] for l in a['limitations']]==[pipeline.NO_CLAIMS[0]]
+ assert not any(c['tool']=='Claim–observation linking' for c in run.calls)
+ # Adding a source afterwards re-evaluates without observing the images again.
+ run.calls.clear();revise(a,sources=[SOURCE]);run.again(a)
+ assert len(a['observations'])==3 and not any(c['tool'].startswith(('Image observation','Claim extraction')) for c in run.calls)
+
+def test_retry_before_any_verified_revision_starts_over(run):
+ # A failed first run leaves partial results behind; the retry must not add to them.
+ a=run(base);a['display_revision']=0;a['limitations'].append(dict(text='stale',text_ja='古い',scope='image'))
+ run.again(a)
+ assert [o['id'] for o in a['observations']]==['observation-1-1','observation-1-2','observation-2-1'] and len(a['claims'])==2
+ assert not any(l['text']=='stale' for l in a['limitations'])

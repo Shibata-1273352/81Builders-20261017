@@ -16,6 +16,7 @@ DEFAULT_REASON=('No supporting source is currently registered.','現在、裏付
 DEFAULT_MISSING=('A source that directly addresses this claim and its applicable place and time.','この主張と、その場所・時期に直接言及する出典。')
 PHOTO_MISSING=('Independent provenance linking this exact photograph to a place and date.','この写真そのものを場所と日付に結びつける、独立した来歴情報。')
 IMAGE_FAILED=('Image observation failed for image {n}; text claims can still be evaluated.','画像{n}の観察に失敗しました。文章の主張は引き続き評価できます。')
+NO_CLAIMS=('No checkable statement was found in the text, so only the images are described.','文章から確かめられる主張が見つからなかったため、画像の説明のみを表示しています。')
 NO_REGION=('No reliable image region was returned. Observations refer to the whole image.','信頼できる画像領域が得られませんでした。観察は画像全体を指します。')
 LINK_FAILED=('Claim–image links are unavailable for this analysis.','主張と画像の対応付けを取得できませんでした。')
 JA_MISSING=('Japanese text is unavailable for some items; English is shown instead.','一部の項目は日本語を生成できなかったため、英語のみ表示しています。')
@@ -26,14 +27,21 @@ def limit(a,pair,scope='revision',**fmt):
  if item not in a['limitations']:a['limitations'].append(item)
 def model_image(a,asset):return 'data:image/jpeg;base64,'+base64.b64encode((store.DATA/f"{a['id']}-{asset['index']}-model.jpg").read_bytes()).decode()
 
+def locate(span,text):
+ # The span must come from the user's text; tolerate only quotes, outer spaces and letter case added by the model.
+ if not isinstance(span,str):return None
+ for s in (span,span.strip().strip('"\'“”‘’「」『』').strip()):
+  if s and s in text:return text.index(s),len(s)
+  if s and len(text.lower())==len(text) and s.lower() in text.lower():return text.lower().index(s.lower()),len(s)
+ return None
+
 def validate_claims(raw,text):
  claims=[]
  for item in raw.get('claims',[])[:8]:
-  span=item.get('span','')
-  if not isinstance(span,str) or not span or span not in text:continue
-  start=text.index(span)
-  claims.append({'id':f'claim-{len(claims)+1}','text':str(item.get('text',span))[:1000],'text_ja':ja(item.get('text_ja')),'input_start':start,'input_end':start+len(span),'kind':item.get('kind','context'),'place':item.get('place'),'time_start':item.get('time_start'),'time_end':item.get('time_end'),'observation_ids':[],'run_id':raw.get('_run_id')})
- if not claims:raise ValueError('No valid original text spans returned. Please retry.')
+  found=locate(item.get('span'),text)
+  if not found:continue
+  start,size=found
+  claims.append({'id':f'claim-{len(claims)+1}','text':str(item.get('text') or text[start:start+size])[:1000],'text_ja':ja(item.get('text_ja')),'input_start':start,'input_end':start+size,'kind':item.get('kind','context'),'place':item.get('place'),'time_start':item.get('time_start'),'time_end':item.get('time_end'),'observation_ids':[],'run_id':raw.get('_run_id')})
  return claims
 
 def validate_observations(raw,asset):
@@ -114,7 +122,7 @@ async def process(a):
   for t in side:t.cancel()
 
 async def _process(a,seg,side):
- runs=a['runs']; initial=not a['claims']; check=check_model(); previous=a.get('previous') or {}
+ runs=a['runs']; initial=not a.get('display_revision'); check=check_model(); previous=a.get('previous') or {}
  a['limitations']=[l for l in a['limitations'] if isinstance(l,dict) and l.get('scope')=='image']
  # Disabling a source re-evaluates only the claims its impact traversal reached; the rest keep their verified result.
  reuse={c['id'] for c in a['claims']}-set(a.get('stale_claim_ids') or []) if a.get('reuse_unaffected') else set()
@@ -164,10 +172,13 @@ async def _process(a,seg,side):
  def start_culture():
   if a['observations'] and (initial or a.get('cultural_notes') is None):side.append(asyncio.ensure_future(explain_culture()))
  if initial:
-  a['cultural_notes']=None
+  # Nothing was verified yet (first run, or a retry after a failure): start over instead of adding to partial results.
+  a['cultural_notes']=None;a['observations']=[];a['claims']=[];a['limitations']=[]
   observing=asyncio.ensure_future(asyncio.gather(*[observe(x) for x in a['assets']]))
   try:a['claims']=validate_claims(await invoke(CLAIM_PROMPT,{'text':a['text'],'image_count':len(a['assets'])},runs=runs,tool='Claim extraction'),a['text'])
   except BaseException:observing.cancel();raise
+  # A caption with nothing checkable (a title, a single word) still gets its images observed and explained.
+  if not a['claims']:limit(a,NO_CLAIMS,'image')
   store.save(a);store.event(a,'claims.ready')
   # Verification needs only claims, so it runs while images are still being observed and linked.
   verifying=asyncio.ensure_future(verify())
@@ -175,7 +186,7 @@ async def _process(a,seg,side):
    await observing
    start_culture()
    if a['observations'] and not any(o['bbox'] for o in a['observations']):limit(a,NO_REGION,'image')
-   if a['observations']:await link()
+   if a['observations'] and a['claims']:await link()
    sources=await verifying
   except BaseException:verifying.cancel();raise
  else:start_culture();sources=await verify()
