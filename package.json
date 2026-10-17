@@ -1,0 +1,29 @@
+{
+  "name": "tsumugi",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev --hostname 127.0.0.1",
+    "build": "next build",
+    "start": "next start --hostname 127.0.0.1",
+    "backend": ".venv/bin/uvicorn backend.main:app --host 127.0.0.1 --port 8000",
+    "test": ".venv/bin/python -m pytest tests -q"
+  },
+  "dependencies": {
+    "next": "^15.5.0",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "lucide-react": "^0.468.0",
+    "@fontsource/dm-sans": "^5.2.0",
+    "@fontsource/cormorant-garamond": "^5.2.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.0",
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0"
+  },
+  "overrides": {
+    "postcss": "^8.5.23"
+  }
+}

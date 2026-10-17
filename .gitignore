@@ -218,3 +218,12 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# TSUMUGI local development
+.env.*
+!.env.example
+node_modules
+.next/
+.runtime/
+*.tsbuildinfo
+.DS_Store
