@@ -48,6 +48,8 @@ h2 .bi>span[lang=ja]{font-size:.62em;color:var(--muted)}
 .segmented button{display:inline-flex;align-items:center;gap:5px;border:0;background:none;font-size:10px;letter-spacing:.06em;padding:5px 10px;color:var(--muted)}
 .segmented button.active{background:var(--ink);color:var(--paper)}
 .graph-meta{display:flex;align-items:center;gap:8px;font-size:11px;color:var(--green);margin-bottom:10px}
+.graph-view.loading .graph-scroll{opacity:.4;pointer-events:none}
+.graph-view.loading .graph-meta{color:var(--gold)}
 .graph-scroll{overflow-x:auto;border:1px solid var(--line);background:#fbfaf6}
 .graph-svg{display:block;width:100%;min-width:600px;height:auto;font-family:var(--sans)}
 .graph-svg .lane{fill:transparent}
