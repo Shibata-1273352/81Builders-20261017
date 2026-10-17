@@ -27,3 +27,16 @@ def test_unicode_spans():
  assert c['input_start']==2;assert text[c['input_start']:c['input_end']]=='Kyoto festival.'
 def test_bad_span_rejected():
  with pytest.raises(ValueError):validate_claims({'claims':[{'span':'hallucinated'}]},'Original')
+def test_corner_bbox_converted_to_region(tmp_path,monkeypatch):
+ import asyncio
+ from backend import pipeline,store,graph
+ monkeypatch.setattr(store,'DATA',tmp_path);store.init();(tmp_path/'a-model.jpg').write_bytes(b'x')
+ async def call(system,data,image=None,runs=None,tool=''):
+  if image:return {'observations':[{'text':'Seated men','bbox':[0.33,0.68,0.72,0.89]},{'text':'Inverted','bbox':[0.5,0.5,0.2,0.9]}]}
+  return {'claims':[{'text':'Festival in July.','span':'Festival in July.'}]}
+ async def persist(a):pass
+ monkeypatch.setattr(pipeline,'call',call);monkeypatch.setattr(graph,'persist',persist)
+ a=dict(id='a',revision=1,text='Festival in July.',runs=[],claims=[],observations=[],sources=[],limitations=[],previous=None)
+ asyncio.run(pipeline.process(a))
+ assert a['observations'][0]['bbox']==[0.33,0.68,0.39,0.21];assert a['observations'][1]['bbox'] is None
+ assert a['explanations'][-1]['text'].startswith('“Festival in July” is not established')

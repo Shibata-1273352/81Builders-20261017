@@ -6,6 +6,7 @@
     "dev": "next dev --hostname 127.0.0.1",
     "build": "next build",
     "start": "next start --hostname 127.0.0.1",
+    "demo": "next build && next start --hostname 127.0.0.1",
     "backend": ".venv/bin/uvicorn backend.main:app --host 127.0.0.1 --port 8000",
     "test": ".venv/bin/python -m pytest tests -q"
   },

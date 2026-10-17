@@ -20,7 +20,7 @@ npm run backend
 npm run dev
 ```
 
-Open http://127.0.0.1:3000. Both servers bind to loopback. Use one backend process; there is no multi-worker job queue or public authentication.
+Open http://127.0.0.1:3000. For a presentation, use `npm run demo` instead of `npm run dev`: it serves a production build without the development overlay. Set `TSUMUGI_BACKEND_URL` if the backend is not on port 8000. Both servers bind to loopback. Use one backend process; there is no multi-worker job queue or public authentication.
 
 ## 90-second walkthrough
 
@@ -31,6 +31,8 @@ Open http://127.0.0.1:3000. Both servers bind to loopback. Use one backend proce
 5. Open its evidence and inspect the exact quote. **Disable** the source to withdraw its support.
 
 The caption is synthetic. The photograph is real and licensed CC BY 2.0 by Ippei Suzuki. Credits and source links appear in the UI; its attribution metadata is not submitted as evidence. The source fixture contains short excerpts from Kyoto City's tourism FAQ, including its heading to disambiguate the festival.
+
+A Japanese presenter script with timings, talking points and fallbacks is in [docs/DEMO.md](docs/DEMO.md).
 
 ## Architecture and behavior
 
