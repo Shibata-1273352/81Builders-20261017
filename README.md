@@ -13,14 +13,17 @@ python3 -m venv .venv
 cp .env.example .env  # only for a new installation; preserve an existing .env
 ```
 
-Set the ai& and Neo4j variables in `.env`. The backend automatically loads this file. Never put credentials in `NEXT_PUBLIC_*` variables. Start these in two terminals:
+Set the ai& and Neo4j variables in `.env`. The backend automatically loads this file. Never put credentials in `NEXT_PUBLIC_*` variables. Start and stop both servers with one command:
 
 ```sh
-npm run backend
-npm run dev
+npm run up       # backend + production frontend (no development overlay); waits until both respond
+npm run up:dev   # backend + next dev with hot reload
+npm run status   # show what is running
+npm run logs     # follow .runtime/logs/backend.log and frontend.log
+npm run down     # stop both, including this project's servers started by hand
 ```
 
-Open http://127.0.0.1:3000. For a presentation, use `npm run demo` instead of `npm run dev`: it serves a production build without the development overlay. Set `TSUMUGI_BACKEND_URL` if the backend is not on port 8000. Both servers bind to loopback. Use one backend process; there is no multi-worker job queue or public authentication.
+Open http://127.0.0.1:3000. `BACKEND_PORT` and `FRONTEND_PORT` override the default ports 8000 and 3000. `npm run down` only stops processes running from this directory; another app on the same port is left alone. To run the servers separately instead, use `npm run backend` with `npm run dev` (or `npm run demo`) in two terminals; set `TSUMUGI_BACKEND_URL` if the backend is not on port 8000. Both servers bind to loopback. Use one backend process; there is no multi-worker job queue or public authentication.
 
 ## 90-second walkthrough
 

@@ -8,6 +8,11 @@
     "start": "next start --hostname 127.0.0.1",
     "demo": "next build && next start --hostname 127.0.0.1",
     "backend": ".venv/bin/uvicorn backend.main:app --host 127.0.0.1 --port 8000",
+    "up": "scripts/tsumugi.sh start",
+    "up:dev": "scripts/tsumugi.sh start --dev",
+    "down": "scripts/tsumugi.sh stop",
+    "status": "scripts/tsumugi.sh status",
+    "logs": "scripts/tsumugi.sh logs",
     "test": ".venv/bin/python -m pytest tests -q"
   },
   "dependencies": {

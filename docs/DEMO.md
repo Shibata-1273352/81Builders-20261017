@@ -4,8 +4,8 @@
 
 ## 事前準備（発表5分前）
 
-1. `npm run backend` と `npm run demo` を起動し、http://127.0.0.1:3000 を開く。
-2. `curl -s 127.0.0.1:8000/api/health` で `"configured":true` を確認。
+1. `npm run up` で一括起動し（本番ビルド込みで約15秒）、http://127.0.0.1:3000 を開く。終了は `npm run down`、状態確認は `npm run status`。
+2. `npm run status` で backend が `ready (ai& key configured)` になっていることを確認。
 3. 一度通しで流して ai& と Neo4j の疎通を確認し、「New analysis」でトップに戻しておく。
 4. ブラウザのズームは 90〜100%。根拠パネルが右に開く幅（1280px以上）を確保する。
 
