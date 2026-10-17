@@ -8,6 +8,8 @@ MODEL='facebook/sam3'
 # Masks are waited for until DEADLINE seconds into the 75 s job, and never longer than CAP seconds.
 DEADLINE,CAP=60,25
 SEG_FAILED=('Image segmentation was unavailable for image {n}; outlined boxes are shown instead.','画像{n}のセグメンテーションを利用できなかったため、枠のみを表示しています。')
+SEG_MISSED=('SAM3 found no matching object for some observations in image {n}; those are shown as outlined boxes.','画像{n}の一部の観察では SAM3 が一致する物体を見つけられなかったため、枠のみを表示しています。')
+CUTS={'on','in','at','with','of','near','under','above','behind','by'}
 def url():return os.getenv('SAM3_URL','').rstrip('/')
 def enabled():return bool(url())
 def model_name(a,asset):return f"{a['id']}-{asset['index']}-model.jpg"
@@ -27,6 +29,17 @@ def select(instances,bbox,score=.5,inside=.5):
   overlap=max(min(x1,x+w)-max(x0,x),0)*max(min(y1,y+h)-max(y0,y),0)
   if i['score']>=score and area>0 and overlap/area>=inside:kept.append(i)
  return kept
+
+def simplify(label):
+ # SAM3 matches short nouns: "people pulling ropes" -> people, "person on roof" -> person, "ornate float" -> float.
+ words=[w.strip('.,;:') for w in label.lower().split()];words=[w for w in words if w]
+ if words and words[0] in ('a','an','the'):words=words[1:]
+ for i,w in enumerate(words):
+  if w in CUTS or 0<i<len(words)-1 and w.endswith('ing'):words=words[:i];break
+ out=[]
+ for c in (' '.join(words),words[-1] if words else ''):
+  if c and c!=label.strip().lower() and c not in out:out.append(c)
+ return out
 
 def compose(instances,width,height):
  # Union of the instance masks as an alpha PNG: CSS mask-image paints only the segmented pixels.
@@ -58,13 +71,24 @@ class Job:
    try:await self.warm[asset['id']]
    except Exception:pass  # /segment encodes on its own if warming failed
    raw=await post('/segment',{'image':model_name(a,asset),'labels':[o['label'] for o in todo]},40)
+   found={o['id']:(o['label'],select(raw['results'].get(o['label'],[]),o['bbox'])) for o in todo}
+   # Ask once more with simpler wording; the sidecar caches the image encoding, so this costs only a decode.
+   retry={o['id']:simplify(o['label']) for o in todo if not found[o['id']][1]}
+   labels=list(dict.fromkeys(c for cs in retry.values() for c in cs))
+   if labels:
+    again=await post('/segment',{'image':model_name(a,asset),'labels':labels},40)
+    for o in todo:
+     for c in retry.get(o['id'],[]):
+      picked=select(again['results'].get(c,[]),o['bbox'])
+      if picked:found[o['id']]=(c,picked);break
    for o in todo:
-    picked=select(raw['results'].get(o['label'],[]),o['bbox'])
+    prompt,picked=found[o['id']]
     if not picked:continue
     image,area=compose(picked,raw['width'],raw['height'])
     image.save(store.DATA/mask_name(a,o['id']),'PNG')
-    o['mask']=dict(score=max(i['score'] for i in picked),instance_count=len(picked),area=area,segmenter=MODEL,run_id=run['id'])
+    o['mask']=dict(score=max(i['score'] for i in picked),instance_count=len(picked),area=area,segmenter=MODEL,prompt=prompt,run_id=run['id'])
     o['producer']='SAM3 mask from VLM candidate'
+   if any(not p for _,p in found.values()):self.limit(a,SEG_MISSED,'image',n=asset['index'])
    run.update(status='completed',latency_ms=round((time.monotonic()-started)*1000),output_valid=True,encode_ms=raw.get('encode_ms'),decode_ms=raw.get('decode_ms'))
    store.save(a);store.event(a,'tool.completed',{'tool':tool});store.event(a,'regions.segmented',{'asset_id':asset['id']})
   except asyncio.CancelledError:
