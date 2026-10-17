@@ -52,38 +52,6 @@ h2 .bi>span[lang=ja]{font-size:.62em;color:var(--muted)}
 .segmented{display:inline-flex;border:1px solid var(--line)}
 .segmented button{display:inline-flex;align-items:center;gap:5px;border:0;background:none;font-size:10px;letter-spacing:.06em;padding:5px 10px;color:var(--muted)}
 .segmented button.active{background:var(--ink);color:var(--paper)}
-.graph-meta{display:flex;align-items:center;gap:8px;font-size:11px;color:var(--green);margin-bottom:10px}
-.graph-view.loading .graph-scroll{opacity:.4;pointer-events:none}
-.graph-view.loading .graph-meta{color:var(--gold)}
-.graph-scroll{overflow-x:auto;border:1px solid var(--line);background:#fbfaf6}
-.graph-svg{display:block;width:100%;min-width:600px;height:auto;font-family:var(--sans)}
-.graph-svg .lane{fill:transparent}
-.graph-svg .lane.odd{fill:#f1efe7}
-.lane-name{font-size:11px;font-weight:600;fill:var(--ink)}
-.lane-model{font-size:8.5px;fill:var(--muted)}
-.edge{fill:none;stroke:#a9ab9f;stroke-width:1;opacity:.7;transition:opacity .15s}
-.edge.linked_to{stroke-dasharray:3 3;stroke:#c78b3d}
-.edge.cites.supports{stroke:var(--green)}
-.edge.cites.contradicts{stroke:var(--red)}
-.edge.on{stroke-width:2;opacity:1}
-.edge.dim{opacity:.12}
-.gnode{cursor:pointer;outline:none;transition:opacity .15s}
-.gnode>rect:first-child{fill:#fff;stroke-width:1}
-.gnode>rect.status-confirmed{fill:#e7eee5}
-.gnode>rect.status-contradicted{fill:#f3e2da}
-.gnode>rect.status-unresolved{fill:#eee9d9}
-.gnode>rect.inactive{fill:#e6e5df;stroke-dasharray:3 2}
-.gnode text{font-size:10px;fill:var(--ink)}
-.gnode.dim{opacity:.22}
-.gnode:hover>rect:first-child,.gnode:focus-visible>rect:first-child,.gnode.focus>rect:first-child{stroke-width:2.5}
-.gnode.impact>rect:first-child{stroke:var(--red)!important;stroke-width:2.5}
-.graph-legend{display:flex;flex-wrap:wrap;gap:6px 14px;font-size:9px;color:var(--muted);margin:10px 0}
-.graph-legend span{display:inline-flex;align-items:center;gap:5px}
-.graph-legend i{display:inline-block;width:10px;height:10px;border-radius:2px}
-.graph-legend i.dash{height:0;border-top:2px dashed #c78b3d;border-radius:0;width:16px}
-.graph-detail{border-top:1px solid var(--line);padding:12px 0;min-height:70px}
-.graph-detail p{font-size:14px;margin:6px 0}
-.graph-detail .hint{font-size:11px;color:var(--muted)}
 .activity-body>.timeline{display:block;padding:4px 0 12px;border:0}
 .timeline-row{display:grid;grid-template-columns:minmax(150px,230px) 1fr 90px;align-items:center;gap:12px;font-size:11px;padding:4px 0}
 .timeline-tool small{display:block;font-size:9px;color:var(--muted)}
